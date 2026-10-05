@@ -397,6 +397,8 @@ pub fn serial_ports() -> Result<Vec<(String, String)>, String> {
     #[link(name = "cfgmgr32")]
     unsafe extern "system" {
         fn CM_Locate_DevNodeW(node: *mut u32, device_id: *const u16, flags: u32) -> u32;
+        fn CM_Get_Parent(parent: *mut u32, node: u32, flags: u32) -> u32;
+        fn CM_Get_Device_IDW(node: u32, buffer: *mut u16, length: u32, flags: u32) -> u32;
         fn CM_Get_DevNode_Status(status: *mut u32, problem: *mut u32, node: u32, flags: u32)
         -> u32;
     }
@@ -419,72 +421,93 @@ pub fn serial_ports() -> Result<Vec<(String, String)>, String> {
     // Read only known ESP32-S3 USB-Serial/JTAG entries; stale registry devices are
     // excluded by their active DOS mapping. No generic COM port is ever selected.
     unsafe {
-        let Some(usb) = open(
-            (-2147483646isize) as Key,
-            "SYSTEM\\CurrentControlSet\\Enum\\USB\\VID_303A&PID_1001",
-        ) else {
-            return Ok(vec![]);
-        };
         let mut ports = Vec::new();
-        for index in 0..256 {
-            let mut name = [0u16; 260];
-            let mut length = 260;
-            let result = RegEnumKeyExW(
-                usb.0,
-                index,
-                name.as_mut_ptr(),
-                &mut length,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-            );
-            if result == 259 {
-                break;
-            }
-            if result != 0 {
-                return Err("无法读取 USB 串口信息".into());
-            }
-            let serial = String::from_utf16_lossy(&name[..length as usize]);
-            // A historical COM number can be reused by a different USB device.
-            // Require this exact ESP USB devnode to be present and started too.
-            let mut node = 0;
-            let mut status = 0;
-            let mut problem = 0;
-            let device_id = wide(&format!("USB\\VID_303A&PID_1001\\{serial}"));
-            if CM_Locate_DevNodeW(&mut node, device_id.as_ptr(), 0) != 0
-                || CM_Get_DevNode_Status(&mut status, &mut problem, node, 0) != 0
-                || status & 0x8 == 0
-            {
-                continue;
-            }
-            let Some(parameters) = open(usb.0, &format!("{serial}\\Device Parameters")) else {
+        // Windows may expose CDC on MI_00 rather than the composite parent.
+        for usb_id in ["VID_303A&PID_1001", "VID_303A&PID_1001&MI_00"] {
+            let Some(usb) = open(
+                (-2147483646isize) as Key,
+                &format!("SYSTEM\\CurrentControlSet\\Enum\\USB\\{usb_id}"),
+            ) else {
                 continue;
             };
-            let mut value = [0u16; 64];
-            let mut size = 128;
-            let mut kind = 0;
-            if RegQueryValueExW(
-                parameters.0,
-                wide("PortName").as_ptr(),
-                ptr::null_mut(),
-                &mut kind,
-                value.as_mut_ptr().cast(),
-                &mut size,
-            ) != 0
-                || kind != 1
-            {
-                continue;
-            }
-            let port = String::from_utf16_lossy(
-                &value[..value.iter().position(|n| *n == 0).unwrap_or(value.len())],
-            );
-            if !valid_port(&port) {
-                continue;
-            }
-            let mut target = [0u16; 512];
-            if QueryDosDeviceW(wide(&port).as_ptr(), target.as_mut_ptr(), 512) > 0 {
-                ports.push((port, serial));
+            for index in 0..256 {
+                let mut name = [0u16; 260];
+                let mut length = 260;
+                let result = RegEnumKeyExW(
+                    usb.0,
+                    index,
+                    name.as_mut_ptr(),
+                    &mut length,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                );
+                if result == 259 {
+                    break;
+                }
+                if result != 0 {
+                    return Err("无法读取 USB 串口信息".into());
+                }
+                let serial = String::from_utf16_lossy(&name[..length as usize]);
+                // A historical COM number can be reused by a different USB device.
+                // Require this exact ESP USB devnode to be present and started too.
+                let mut node = 0;
+                let mut status = 0;
+                let mut problem = 0;
+                let device_id = wide(&format!("USB\\{usb_id}\\{serial}"));
+                if CM_Locate_DevNodeW(&mut node, device_id.as_ptr(), 0) != 0
+                    || CM_Get_DevNode_Status(&mut status, &mut problem, node, 0) != 0
+                    || status & 0x8 == 0
+                {
+                    continue;
+                }
+                let Some(parameters) = open(usb.0, &format!("{serial}\\Device Parameters")) else {
+                    continue;
+                };
+                let mut value = [0u16; 64];
+                let mut size = 128;
+                let mut kind = 0;
+                if RegQueryValueExW(
+                    parameters.0,
+                    wide("PortName").as_ptr(),
+                    ptr::null_mut(),
+                    &mut kind,
+                    value.as_mut_ptr().cast(),
+                    &mut size,
+                ) != 0
+                    || kind != 1
+                {
+                    continue;
+                }
+                let port = String::from_utf16_lossy(
+                    &value[..value.iter().position(|n| *n == 0).unwrap_or(value.len())],
+                );
+                if !valid_port(&port) {
+                    continue;
+                }
+                let mut target = [0u16; 512];
+                if QueryDosDeviceW(wide(&port).as_ptr(), target.as_mut_ptr(), 512) > 0 {
+                    let serial = if usb_id.ends_with("&MI_00") {
+                        let mut parent = 0;
+                        let mut id = [0u16; 512];
+                        if CM_Get_Parent(&mut parent, node, 0) != 0
+                            || CM_Get_Device_IDW(parent, id.as_mut_ptr(), 512, 0) != 0
+                        {
+                            continue;
+                        }
+                        let id = String::from_utf16_lossy(
+                            &id[..id.iter().position(|n| *n == 0).unwrap_or(id.len())],
+                        );
+                        let Some(serial) = id.strip_prefix("USB\\VID_303A&PID_1001\\") else {
+                            continue;
+                        };
+                        serial.to_owned()
+                    } else {
+                        serial
+                    };
+                    ports.push((port, serial));
+                }
             }
         }
         ports.sort();
