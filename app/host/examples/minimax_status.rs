@@ -17,6 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("udp_received={}", snapshot.lan.udp_received);
     println!("heartbeat_received={}", snapshot.lan.heartbeat_received);
     println!("heartbeat_authenticated={}", snapshot.lan.heartbeat_authenticated);
+    println!("keyboard_volume_percent={:?}", snapshot.lan.keyboard_volume_percent);
     println!("playback_received={}", snapshot.lan.playback_received);
     println!("mailbox_sent={}", snapshot.lan.mailbox_sent);
     println!("audio_frames_accepted={}", snapshot.lan.audio_frames_accepted);
