@@ -5,6 +5,8 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::mem;
+#[cfg(windows)]
+use std::net::{TcpListener as LocalListener, TcpStream as LocalStream};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 #[cfg(unix)]
@@ -13,19 +15,17 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as LocalListener, UnixStream as LocalStream};
-#[cfg(windows)]
-use std::net::{TcpListener as LocalListener, TcpStream as LocalStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+use aes_gcm::aead::rand_core::{OsRng, RngCore};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-#[cfg(windows)]
-use aes_gcm::aead::rand_core::{OsRng, RngCore};
 
 #[cfg(all(any(target_os = "macos", windows), not(test)))]
 use crate::audio::{inspect_eiad, inspect_eiad_signal, transcode_eiad_for_device};
@@ -34,28 +34,38 @@ use crate::bindings::BindingService;
 use crate::cache::{CacheId, CacheStore};
 use crate::codex_catalog::{CatalogError, CodexTaskCatalog};
 use crate::codex_runner::{CodexRunner, CodexRunnerConfig};
+#[cfg(not(windows))]
 use crate::dashscope::{ASR_MODEL, TTS_MODEL};
 use crate::lan_playback::MailboxStatus;
 #[cfg(all(any(target_os = "macos", windows), not(test)))]
 use crate::lan_playback::{PLAYBACK_CHUNK_BYTES, PlaybackBegin, PlaybackIdentity};
 #[cfg(all(any(target_os = "macos", windows), not(test)))]
 use crate::lan_voice::{LanPlaybackEvent, LanPlaybackRequest};
-use crate::lan_voice::{LanVoiceConfig, LanVoiceDiagnosticsSnapshot, LanVoiceError, LanVoiceIngress};
+use crate::lan_voice::{
+    LanVoiceConfig, LanVoiceDiagnosticsSnapshot, LanVoiceError, LanVoiceIngress,
+};
+#[cfg(windows)]
+use crate::minimax::TTS_VOICE as SUMMARY_TTS_VOICE;
+#[cfg(windows)]
+use crate::minimax::{ASR_MODEL, TTS_MODEL};
 use crate::paths::{AppPaths, open_owned_directory_chain};
 use crate::prompt_queue::{DurablePromptScheduler, PromptQueueService};
 use crate::rollout_observer::{ObserverError, RolloutObserver};
-#[cfg(all(any(target_os = "macos", windows), not(test)))]
-use crate::secrets::{ImportLock, KeychainAccounts, dashscope_key_is_installed};
 #[cfg(all(target_os = "macos", not(test)))]
 use crate::secrets::DashScopeEnvStore;
-#[cfg(all(windows, not(test)))]
-use crate::secrets::WindowsDashScopeStore;
+#[cfg(all(target_os = "macos", not(test)))]
+use crate::secrets::{ImportLock, KeychainAccounts, dashscope_key_is_installed};
 #[cfg(all(any(target_os = "macos", windows), not(test)))]
 use crate::store::SummaryPlaybackLease;
 use crate::store::{EnqueueOutcome, StateStore, StoreError};
+#[cfg(not(windows))]
 use crate::summary_orchestrator::SUMMARY_TTS_VOICE;
 
 pub const HEALTH_PROTOCOL_VERSION: u8 = 1;
+#[cfg(windows)]
+const PROVIDER_REGION: &str = "minimax-cn";
+#[cfg(not(windows))]
+const PROVIDER_REGION: &str = "cn-beijing";
 pub const HEALTH_SOCKET_NAME: &str = "host.sock";
 const MAX_REQUEST_BYTES: usize = 4 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
@@ -161,6 +171,7 @@ pub struct DashboardTask {
     pub project: String,
     pub updated_at_ms: u64,
     pub pinned: bool,
+    pub cli_created: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +187,7 @@ pub struct DashboardSlot {
     pub unread_coverage: Option<u32>,
     pub latest_job_state: Option<String>,
     pub latest_job_failure: Option<String>,
+    pub latest_job_updated_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,7 +388,10 @@ impl HostDaemon {
                     }
                     Err(error) => {
                         self.lan_voice.note_queue_rejected();
-                        eprintln!("lan_voice_enqueue_rejected slot={} error={error}", prompt.slot);
+                        eprintln!(
+                            "lan_voice_enqueue_rejected slot={} error={error}",
+                            prompt.slot
+                        );
                     }
                 }
             }
@@ -424,10 +439,19 @@ impl HostDaemon {
                             let _reservation = ClientReservation(active_clients);
                             #[cfg(windows)]
                             if let Err(error) = stream.set_nonblocking(false) {
-                                eprintln!("host_ipc_client_error=blocking_mode_failed kind={:?}", error.kind());
+                                eprintln!(
+                                    "host_ipc_client_error=blocking_mode_failed kind={:?}",
+                                    error.kind()
+                                );
                                 return;
                             }
-                            if let Err(error) = handle_client(stream, &snapshot, &control_sender, #[cfg(windows)] &auth_token) {
+                            if let Err(error) = handle_client(
+                                stream,
+                                &snapshot,
+                                &control_sender,
+                                #[cfg(windows)]
+                                &auth_token,
+                            ) {
                                 #[cfg(windows)]
                                 eprintln!("host_ipc_client_error={error:?}");
                             }
@@ -779,7 +803,8 @@ fn build_dashboard(
             unread_generation: unread.as_ref().map(|summary| summary.generation),
             unread_coverage: unread.as_ref().map(|summary| summary.coverage_count),
             latest_job_state: latest_job.as_ref().map(|job| job.0.clone()),
-            latest_job_failure: latest_job.and_then(|job| job.1),
+            latest_job_failure: latest_job.as_ref().and_then(|job| job.1.clone()),
+            latest_job_updated_at: latest_job.map(|job| job.2),
         });
     }
     let tasks = tasks
@@ -790,6 +815,7 @@ fn build_dashboard(
             project: task.project,
             updated_at_ms: task.updated_at_ms,
             pinned: task.pinned,
+            cli_created: task.cli_created,
         })
         .collect();
     Ok(DashboardSnapshot {
@@ -802,7 +828,7 @@ fn build_dashboard(
                 #[cfg(all(any(target_os = "macos", windows), not(test)))]
                 paths,
             ),
-            region: "cn-beijing".to_owned(),
+            region: PROVIDER_REGION.to_owned(),
             asr_model: ASR_MODEL.to_owned(),
             tts_model: TTS_MODEL.to_owned(),
             voice: SUMMARY_TTS_VOICE.to_owned(),
@@ -826,9 +852,8 @@ fn dashscope_ready(paths: &AppPaths) -> bool {
 
 #[cfg(all(windows, not(test)))]
 fn dashscope_ready(paths: &AppPaths) -> bool {
-    let Ok(import_lock) = ImportLock::acquire(&paths.runtime_directory.join("key-import.lock")) else { return false; };
-    let Ok(accounts) = KeychainAccounts::load_or_create(&paths.installation_id, &import_lock) else { return false; };
-    dashscope_key_is_installed(&WindowsDashScopeStore::new(&accounts), &accounts).unwrap_or(false)
+    let _ = paths;
+    crate::windows_credential::read_minimax_key().is_ok_and(|key| key.is_some())
 }
 
 #[cfg(any(test, not(any(target_os = "macos", windows))))]
@@ -849,7 +874,11 @@ fn handle_client(
     #[cfg(windows)]
     let request = serde_json::from_slice::<AuthenticatedHostRequest>(&request_bytes)
         .map(|envelope| {
-            if envelope.token == auth_token { Ok(envelope.request) } else { Err(()) }
+            if envelope.token == auth_token {
+                Ok(envelope.request)
+            } else {
+                Err(())
+            }
         })
         .unwrap_or(Err(()));
     match request {
@@ -999,8 +1028,15 @@ fn query_host<T: DeserializeOwned>(
         .map_err(|error| health_context(error, "write request"))?;
     #[cfg(windows)]
     {
-        write_json_line(&mut stream, &AuthenticatedHostRequestRef { token: &token, request }, deadline)
-            .map_err(|error| health_context(error, "write request"))?;
+        write_json_line(
+            &mut stream,
+            &AuthenticatedHostRequestRef {
+                token: &token,
+                request,
+            },
+            deadline,
+        )
+        .map_err(|error| health_context(error, "write request"))?;
     }
     let _ = stream.shutdown(std::net::Shutdown::Write);
     let response = read_bounded(
@@ -1033,7 +1069,7 @@ fn validate_dashboard(dashboard: &DashboardSnapshot) -> Result<(), HealthError> 
         || dashboard.tasks.len()
             > crate::codex_catalog::MAX_PINNED_TASKS + crate::codex_catalog::MAX_RECENT_TASKS
         || dashboard.slots.len() != 4
-        || dashboard.provider.region != "cn-beijing"
+        || dashboard.provider.region != PROVIDER_REGION
         || dashboard.provider.asr_model != ASR_MODEL
         || dashboard.provider.tts_model != TTS_MODEL
         || dashboard.provider.voice != SUMMARY_TTS_VOICE
@@ -1055,6 +1091,7 @@ fn validate_dashboard(dashboard: &DashboardSnapshot) -> Result<(), HealthError> 
         if !(1..=4).contains(&slot.slot)
             || !slots.insert(slot.slot)
             || slot.binding_generation == Some(0)
+            || slot.latest_job_updated_at.is_some_and(|timestamp| timestamp <= 0)
             || slot
                 .task_id
                 .as_deref()
@@ -1543,8 +1580,16 @@ fn read_windows_endpoint(path: &Path) -> Result<(u16, String), HealthError> {
         return Err(HealthError::UnsafeSocket);
     }
     let mut lines = contents.lines();
-    let port = lines.next().and_then(|value| value.parse::<u16>().ok()).filter(|port| *port > 0);
-    let token = lines.next().filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
+    let port = lines
+        .next()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0);
+    let token = lines.next().filter(|value| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    });
     if lines.next().is_some() {
         return Err(HealthError::UnsafeSocket);
     }
@@ -1591,7 +1636,10 @@ fn remove_socket_if_identity(
         return Err(HealthError::UnsafeSocket);
     }
     let parent = path.parent().ok_or(HealthError::UnsafeSocket)?;
-    let retired = parent.join(format!(".{HEALTH_SOCKET_NAME}.{}.retired", uuid::Uuid::new_v4()));
+    let retired = parent.join(format!(
+        ".{HEALTH_SOCKET_NAME}.{}.retired",
+        uuid::Uuid::new_v4()
+    ));
     before_rename();
     crate::windows_paths::rename_noreplace(path, &retired)?;
     if validate_private_socket(&retired)? != expected {

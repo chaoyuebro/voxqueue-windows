@@ -1,0 +1,43 @@
+{
+  "scope": "dedicated desktop test chat only",
+  "pythonSyntax": "valid",
+  "testRolloutFound": true,
+  "markers": {
+    "VOXQUEUE_DESKTOP_IPC_OK_1": {
+      "user": 1,
+      "assistant": 1
+    },
+    "VOXQUEUE_BUSY_A": {
+      "user": 1,
+      "assistant": 1
+    },
+    "VOXQUEUE_BUSY_B": {
+      "user": 1,
+      "assistant": 1
+    },
+    "VOXQUEUE_FIFO_A": {
+      "user": 1,
+      "assistant": 1
+    },
+    "VOXQUEUE_FIFO_B": {
+      "user": 1,
+      "assistant": 1
+    }
+  },
+  "taskStartedCount": 5,
+  "taskCompleteCount": 5,
+  "allStartedTurnsCompleted": true,
+  "usedCodexExecResume": false,
+  "busySubmissionsSharedTurn": true,
+  "fifoTestUsedIndependentTurns": true,
+  "physicalKeyboardTested": false,
+  "visualScreenInspectionPerformed": false,
+  "originalPageAcceptance": "failed: user screenshot and desktop error boundary",
+  "rootCause": "missing text_elements array in original desktop IPC input",
+  "requestFixed": true,
+  "originalThreadPageRepaired": false,
+  "replacementBranch": "VoxQueue 桌面投递验证（修正版）",
+  "fixedBranchReply": "VOXQUEUE_FIXED_PAGE_OK",
+  "fixedBranchLogCheck": "active view recorded, no new matching error boundary observed",
+  "userVisualAcceptance": "pending"
+}

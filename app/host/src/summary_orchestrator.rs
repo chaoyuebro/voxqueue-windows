@@ -2,6 +2,8 @@ use thiserror::Error;
 
 use crate::cache::{CacheError, CacheStore};
 use crate::dashscope::{DashScopeTtsClient, TtsAudio, TtsError, TtsRequest};
+#[cfg(windows)]
+use crate::minimax::{VoiceClient as MiniMaxVoiceClient, VoiceError as MiniMaxVoiceError};
 use crate::secrets::{KeychainAccounts, SecretStore};
 use crate::spark_runner::{SparkError, SparkRunner};
 use crate::store::{
@@ -13,7 +15,10 @@ use crate::tts_cache::{
     publish_tts_generation_with,
 };
 
+#[cfg(not(windows))]
 pub const SUMMARY_TTS_VOICE: &str = "longanfengyue";
+#[cfg(windows)]
+pub const SUMMARY_TTS_VOICE: &str = crate::minimax::TTS_VOICE;
 pub const SUMMARY_TTS_INSTRUCTIONS: &str = "请用自然、清晰、克制的普通话女声，像熟悉工作的同事当面简洁汇报。整体语速中等，句间只做必要的短停顿；最新结果、数字、限制和待办要清楚。语气平实、有温度，不要播音腔、客服腔、广告腔、夸张情绪或撒娇；英文技术词、数字和缩写按自然语境读，不朗读标点和格式符号。";
 
 pub trait SummaryGenerator {
@@ -61,6 +66,34 @@ impl<S: SecretStore> SummarySynthesizer for DashScopeSummarySynthesizer<'_, S> {
                 instructions,
             },
         )
+    }
+}
+
+#[cfg(windows)]
+pub struct MiniMaxSummarySynthesizer<'a> {
+    pub client: &'a MiniMaxVoiceClient,
+    pub key: &'a [u8],
+}
+
+#[cfg(windows)]
+impl SummarySynthesizer for MiniMaxSummarySynthesizer<'_> {
+    fn synthesize(
+        &self,
+        text: &str,
+        _voice: &str,
+        _instructions: &str,
+    ) -> Result<TtsAudio, TtsError> {
+        self.client
+            .synthesize(self.key, text)
+            .map_err(|error| match error {
+                MiniMaxVoiceError::Rejected => TtsError::Rejected,
+                MiniMaxVoiceError::RateLimited => TtsError::RateLimited,
+                MiniMaxVoiceError::Unavailable => TtsError::Unavailable,
+                MiniMaxVoiceError::AmbiguousAfterCommit => TtsError::AmbiguousAfterCommit,
+                MiniMaxVoiceError::InvalidRequest => TtsError::InvalidRequest,
+                MiniMaxVoiceError::Protocol => TtsError::Protocol,
+                MiniMaxVoiceError::AudioLimit => TtsError::AudioLimit,
+            })
     }
 }
 

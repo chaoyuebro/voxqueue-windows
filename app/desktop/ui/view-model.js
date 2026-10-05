@@ -32,6 +32,7 @@
  *   project: string,
  *   updated_at_ms: number,
  *   pinned: boolean
+ *   cli_created: boolean
  * }} DashboardTask
  *
  * @typedef {{
@@ -44,7 +45,8 @@
  *   unread_generation: number | null,
  *   unread_coverage: number | null,
  *   latest_job_state: string | null,
- *   latest_job_failure: string | null
+ *   latest_job_failure: string | null,
+ *   latest_job_updated_at: number | null
  * }} DashboardSlot
  *
  * @typedef {{
@@ -130,13 +132,21 @@ export function presentSlotStatus(slot) {
     const coverage = slot.unread_coverage ?? 1;
     facts.push(`待听总结 ${coverage} 次`);
   }
-  if (facts.length > 0) {
-    return facts.join(" · ");
-  }
   if (slot.latest_job_state === "failed") {
-    return `最近任务失败${slot.latest_job_failure ? `：${slot.latest_job_failure}` : ""}`;
+    const updatedAt = slot.latest_job_updated_at;
+    const when = typeof updatedAt === "number" &&
+      Number.isSafeInteger(updatedAt) && updatedAt > 0
+      ? new Intl.DateTimeFormat("zh-CN", {
+          month: "numeric",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).format(new Date(updatedAt * 1000))
+      : null;
+    facts.push(`上次失败${when ? `（${when}）` : ""}${slot.latest_job_failure ? `：${slot.latest_job_failure}` : ""}`);
   }
-  return slot.task_id ? "已绑定" : "未绑定";
+  return facts.length > 0 ? facts.join(" · ") : slot.task_id ? "已绑定" : "未绑定";
 }
 
 /** @param {DashboardTask[]} tasks @returns {DashboardTask[]} */

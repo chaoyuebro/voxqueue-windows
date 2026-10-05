@@ -91,6 +91,7 @@ pub struct CodexTask {
     pub rollout_path: PathBuf,
     pub updated_at_ms: u64,
     pub pinned: bool,
+    pub cli_created: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -220,6 +221,7 @@ struct DatabaseTask {
     cwd: PathBuf,
     rollout_path: PathBuf,
     updated_at_ms: u64,
+    cli_created: bool,
 }
 
 #[derive(Debug)]
@@ -402,7 +404,7 @@ fn validate_database_row(
     {
         return Ok(None);
     }
-    let rollout_path = PathBuf::from(rollout_path);
+    let rollout_path = normalize_rollout_path(PathBuf::from(rollout_path));
     if !validate_rollout_path(codex_home, &rollout_path)? {
         return Ok(None);
     }
@@ -414,8 +416,20 @@ fn validate_database_row(
             cwd: PathBuf::from(cwd),
             rollout_path,
             updated_at_ms: updated_at_ms as u64,
+            cli_created: matches!(source.trim(), "exec" | "cli"),
         },
     }))
+}
+
+fn normalize_rollout_path(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(stripped) = path.to_str().and_then(|value| value.strip_prefix(r"\\?\")) {
+        // Codex may persist a Windows verbatim disk path for an otherwise
+        // ordinary session file. The existing path guard below still checks
+        // that the normalized path is inside this user's sessions directory.
+        return PathBuf::from(stripped);
+    }
+    path
 }
 
 fn is_user_owned_thread(source: &str, thread_source: &str, agent_role: &str) -> bool {
@@ -557,6 +571,7 @@ fn build_task(
         rollout_path: database.rollout_path.clone(),
         updated_at_ms: database.updated_at_ms,
         pinned,
+        cli_created: database.cli_created,
     })
 }
 
@@ -1213,6 +1228,7 @@ mod tests {
         assert!(catalog.allowlisted(ARCHIVED).is_err());
         assert!(catalog.allowlisted(INTERNAL).is_err());
     }
+
 
     #[test]
     fn catalog_read_does_not_mutate_or_create_codex_index_files() {

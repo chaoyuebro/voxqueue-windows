@@ -1,4 +1,17 @@
-# Codex Keyboard
+# voxqueue-windows
+
+VoxQueue 是基于 EasyInput V2 的 Windows 四槽语音任务键盘。本仓库保存当前 Windows / MiniMax 开发进度，后续开发使用本仓库。
+
+## 当前进度（2026-10-05）
+
+- 已实现 Windows Host、VoxQueue 桌面管理界面、MiniMax ASR/TTS 和四槽 CLI 任务链路；实体键盘验证见 [C4 实测记录](docs/C4-实测记录.md)。
+- 已通过独立 Python 原型验证向 Codex 桌面聊天投递文字、接收回复及观察完成事件。原型曾因缺少 `text_elements` 导致页面异常，字段已修正；修正版聊天日志检查通过，最终视觉验收仍待确认。
+- 桌面 IPC 原型尚未接入 VoxQueue 的槽位执行器，目前仅绑定桌面聊天不能视为语音链路已经完成。下一步接入单槽，保留 Host FIFO，再验证录音、灯光、总结和实体播放。
+- 内部桌面接口需要随 Codex 版本复验；完整调研与限制见 [桌面端接入记录](docs/Codex桌面端语音接入调研.md)，实验脚本位于 `tools/desktop-validation/`。
+
+本次 Git 保存为现有开发状态快照，不代表所有平台测试、长稳测试或桌面端语音集成已经通过。
+
+Windows MiniMax 语音开发候选的安装说明见 [docs/windows-minimax-setup.md](docs/windows-minimax-setup.md)。原 `v0.1.0-windows-preview.1` 发布包仍使用百炼。
 
 EasyInput V2 的本地语音任务键盘。上排 S1–S4 按住说话，把要求交给各自绑定的 Codex 任务；下排 S5–S8 在开发板扬声器播放对应任务的未听总结。键盘与电脑通过同一局域网通信，电脑运行 Host 和桌面管理程序。
 

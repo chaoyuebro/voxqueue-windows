@@ -20,14 +20,14 @@ use easy_codex_host::provisioning::{LanProvisioning, load_or_create_device_secre
 use easy_codex_host::secrets::MacKeychainStore;
 #[cfg(windows)]
 use easy_codex_host::secrets::WindowsDashScopeStore;
+#[cfg(unix)]
+use easy_codex_host::secrets::configure_dashscope_env;
 #[cfg(target_os = "macos")]
 use easy_codex_host::secrets::remove_legacy_dashscope_items;
 use easy_codex_host::secrets::{
     DashScopeEnvStore, ImportLock, KeychainAccounts, LocalCacheSecretStore, SecretStore,
     dashscope_key_is_installed,
 };
-#[cfg(unix)]
-use easy_codex_host::secrets::configure_dashscope_env;
 #[cfg(target_os = "macos")]
 use easy_codex_host::spark_runner::{SparkRunner, SparkRunnerConfig};
 use easy_codex_host::store::StateStore;
@@ -46,6 +46,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "dashscope-key-status" => {
                 require_no_more_arguments(&mut arguments, "dashscope-key-status")?;
                 return dashscope_status();
+            }
+            #[cfg(windows)]
+            "minimax-key-status" => {
+                require_no_more_arguments(&mut arguments, "minimax-key-status")?;
+                println!("provider=minimax");
+                println!(
+                    "configured={}",
+                    easy_codex_host::windows_credential::read_minimax_key()?.is_some()
+                );
+                return Ok(());
             }
             "daemon" => {
                 require_no_more_arguments(&mut arguments, "daemon")?;
@@ -207,7 +217,9 @@ fn home_paths() -> Result<AppPaths, Box<dyn std::error::Error>> {
     #[cfg(windows)]
     {
         let local = std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA is unavailable")?;
-        return Ok(AppPaths::from_root(Path::new(&local).join("EasyCodexInput")));
+        return Ok(AppPaths::from_root(
+            Path::new(&local).join("EasyCodexInput"),
+        ));
     }
     #[cfg(not(windows))]
     {
@@ -299,26 +311,44 @@ fn import_asr_model(source: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_asr_status() -> Result<(), Box<dyn std::error::Error>> {
-    let paths = home_paths()?;
-    paths.prepare()?;
-    let import_lock = ImportLock::acquire(&paths.runtime_directory.join("key-import.lock"))?;
-    let accounts = KeychainAccounts::load_or_create(&paths.installation_id, &import_lock)?;
     #[cfg(windows)]
-    let env = WindowsDashScopeStore::new(&accounts);
-    #[cfg(not(windows))]
-    let env = DashScopeEnvStore::new(paths.dashscope_env.clone(), &accounts);
-    let qwen_ready = dashscope_key_is_installed(&env, &accounts)?;
-    let config = WhisperCppConfig::from_paths(&paths);
-    println!("status={}", if qwen_ready { "ready" } else { "missing" });
-    println!("provider=dashscope");
-    println!("model={ASR_MODEL}");
-    println!("region=cn-beijing");
-    println!(
-        "fallback_executable_present={}",
-        config.executable.is_file()
-    );
-    println!("fallback_model_present={}", config.model.is_file());
-    Ok(())
+    {
+        println!(
+            "status={}",
+            if easy_codex_host::windows_credential::read_minimax_key()?.is_some() {
+                "ready"
+            } else {
+                "missing"
+            }
+        );
+        println!("provider=minimax");
+        println!("model={}", easy_codex_host::minimax::ASR_MODEL);
+        println!("region=cn");
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        let paths = home_paths()?;
+        paths.prepare()?;
+        let import_lock = ImportLock::acquire(&paths.runtime_directory.join("key-import.lock"))?;
+        let accounts = KeychainAccounts::load_or_create(&paths.installation_id, &import_lock)?;
+        #[cfg(windows)]
+        let env = WindowsDashScopeStore::new(&accounts);
+        #[cfg(not(windows))]
+        let env = DashScopeEnvStore::new(paths.dashscope_env.clone(), &accounts);
+        let qwen_ready = dashscope_key_is_installed(&env, &accounts)?;
+        let config = WhisperCppConfig::from_paths(&paths);
+        println!("status={}", if qwen_ready { "ready" } else { "missing" });
+        println!("provider=dashscope");
+        println!("model={ASR_MODEL}");
+        println!("region=cn-beijing");
+        println!(
+            "fallback_executable_present={}",
+            config.executable.is_file()
+        );
+        println!("fallback_model_present={}", config.model.is_file());
+        Ok(())
+    }
 }
 
 fn transcribe_asr_file(source: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -327,23 +357,37 @@ fn transcribe_asr_file(source: &Path) -> Result<(), Box<dyn std::error::Error>> 
         return Err("WAV source must be a regular file within the 90 second PCM limit".into());
     }
     let wav = std::fs::read(source)?;
-    let paths = home_paths()?;
-    paths.prepare()?;
-    let import_lock = ImportLock::acquire(&paths.runtime_directory.join("key-import.lock"))?;
-    let accounts = KeychainAccounts::load_or_create(&paths.installation_id, &import_lock)?;
     #[cfg(windows)]
-    let env = WindowsDashScopeStore::new(&accounts);
-    #[cfg(not(windows))]
-    let env = DashScopeEnvStore::new(paths.dashscope_env, &accounts);
-    let secret = env
-        .get(&accounts.dashscope)?
-        .ok_or("DashScope API key is not configured")?;
-    let transcript = DashScopeAsrClient::default().transcribe_wav(&secret, &wav)?;
-    println!("status=transcribed");
-    println!("model={}", transcript.model);
-    println!("transport={}", transcript.transport);
-    println!("text={}", transcript.text);
-    Ok(())
+    {
+        let key = easy_codex_host::windows_credential::read_minimax_key()?
+            .ok_or("MiniMax API key is not configured")?;
+        let text = easy_codex_host::minimax::VoiceClient::new()?.transcribe_wav(&key, &wav)?;
+        println!("status=transcribed");
+        println!("model={}", easy_codex_host::minimax::ASR_MODEL);
+        println!("transport=minimax-http");
+        println!("text={text}");
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        let paths = home_paths()?;
+        paths.prepare()?;
+        let import_lock = ImportLock::acquire(&paths.runtime_directory.join("key-import.lock"))?;
+        let accounts = KeychainAccounts::load_or_create(&paths.installation_id, &import_lock)?;
+        #[cfg(windows)]
+        let env = WindowsDashScopeStore::new(&accounts);
+        #[cfg(not(windows))]
+        let env = DashScopeEnvStore::new(paths.dashscope_env, &accounts);
+        let secret = env
+            .get(&accounts.dashscope)?
+            .ok_or("DashScope API key is not configured")?;
+        let transcript = DashScopeAsrClient::default().transcribe_wav(&secret, &wav)?;
+        println!("status=transcribed");
+        println!("model={}", transcript.model);
+        println!("transport={}", transcript.transport);
+        println!("text={}", transcript.text);
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "macos")]

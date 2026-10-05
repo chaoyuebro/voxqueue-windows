@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$installerName = 'Codex Keyboard_0.1.0_x64-setup.exe'
+$installerName = 'VoxQueue_0.1.0_x64-setup.exe'
 $installer = Join-Path $projectRoot "target\release\bundle\nsis\$installerName"
 $images = @(
     @{ Relative = 'firmware/build/bootloader/bootloader.bin'; Sha256 = '001EBD5CAD3E5CCC7E66B13FF9076AF29B510255F6580FE81379F5444BAD4991' },

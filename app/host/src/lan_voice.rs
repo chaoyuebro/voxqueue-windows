@@ -6,7 +6,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TrySendError};
 use std::thread::{self, JoinHandle};
@@ -24,6 +24,8 @@ use crate::lan_playback::{
     PlaybackFinished, PlaybackIdentity, PlaybackRequest, decode_ack, decode_finished,
     decode_request, encode_begin, encode_data, encode_finished_ack, encode_mailbox_status,
 };
+#[cfg(windows)]
+use crate::minimax::{VoiceClient as MiniMaxVoiceClient, VoiceError as MiniMaxVoiceError};
 use crate::paths::{AppPaths, secure_directory};
 use crate::provisioning::{load_device_secret, load_device_secret_path};
 use crate::secrets::load_dashscope_env_secret;
@@ -82,11 +84,11 @@ pub enum LanVoiceError {
     AsrTimeout,
     #[error("local whisper.cpp failed")]
     AsrFailed,
-    #[error("DashScope rejected the ASR credential")]
+    #[error("voice provider rejected the ASR credential")]
     RemoteAsrRejected,
-    #[error("DashScope rejected the ASR audio")]
+    #[error("voice provider rejected the ASR audio")]
     RemoteAsrInvalidAudio,
-    #[error("DashScope returned an invalid ASR response")]
+    #[error("voice provider returned an invalid ASR response")]
     RemoteAsrProtocol,
     #[error("local whisper.cpp returned invalid text")]
     InvalidTranscript,
@@ -278,7 +280,11 @@ struct LanVoiceDiagnostics {
     mailbox_send_failed: AtomicU64,
     playback_received: AtomicU64,
     audio_frames_accepted: AtomicU64,
+    audio_ends_received: AtomicU64,
     audio_ends_accepted: AtomicU64,
+    audio_ends_rejected: AtomicU64,
+    other_udp_received: AtomicU64,
+    last_audio_end_error: Mutex<Option<&'static str>>,
     captures_ready: AtomicU64,
     captures_rejected: AtomicU64,
     asr_succeeded: AtomicU64,
@@ -302,7 +308,11 @@ pub struct LanVoiceDiagnosticsSnapshot {
     pub mailbox_send_failed: u64,
     pub playback_received: u64,
     pub audio_frames_accepted: u64,
+    pub audio_ends_received: u64,
     pub audio_ends_accepted: u64,
+    pub audio_ends_rejected: u64,
+    pub other_udp_received: u64,
+    pub last_audio_end_error: Option<String>,
     pub captures_ready: u64,
     pub captures_rejected: u64,
     pub asr_succeeded: u64,
@@ -326,12 +336,16 @@ impl LanVoiceIngress {
         let diagnostics = Arc::new(LanVoiceDiagnostics {
             secret_file_present: std::fs::symlink_metadata(&config.device_secret_path).is_ok(),
             #[cfg(windows)]
-            secret_file_readable: crate::paths::read_private_file(&config.device_secret_path).is_ok(),
+            secret_file_readable: crate::paths::read_private_file(&config.device_secret_path)
+                .is_ok(),
             #[cfg(unix)]
-            secret_file_readable: crate::paths::open_private_file(&config.device_secret_path).is_ok(),
+            secret_file_readable: crate::paths::open_private_file(&config.device_secret_path)
+                .is_ok(),
             ..Default::default()
         });
-        diagnostics.auth_key_loaded.store(config.auth_key.is_some(), Ordering::Relaxed);
+        diagnostics
+            .auth_key_loaded
+            .store(config.auth_key.is_some(), Ordering::Relaxed);
         let asr_shutdown = Arc::clone(&shutdown);
         let asr_diagnostics = Arc::clone(&diagnostics);
         let asr_worker = thread::Builder::new()
@@ -342,11 +356,15 @@ impl LanVoiceIngress {
                     match capture_receiver.recv_timeout(RECEIVE_POLL) {
                         Ok(capture) => match transcriber.transcribe(capture) {
                             Ok(prompt) => {
-                                asr_diagnostics.asr_succeeded.fetch_add(1, Ordering::Relaxed);
+                                asr_diagnostics
+                                    .asr_succeeded
+                                    .fetch_add(1, Ordering::Relaxed);
                                 if prompt_sender.send(prompt).is_err() {
                                     return;
                                 }
-                                asr_diagnostics.prompts_delivered.fetch_add(1, Ordering::Relaxed);
+                                asr_diagnostics
+                                    .prompts_delivered
+                                    .fetch_add(1, Ordering::Relaxed);
                             }
                             Err(error) => {
                                 asr_diagnostics.asr_failed.fetch_add(1, Ordering::Relaxed);
@@ -380,33 +398,49 @@ impl LanVoiceIngress {
                     if assembler.auth_key.is_none() && now >= next_auth_reload {
                         if let Ok(key) = load_device_secret_path(&config.device_secret_path) {
                             assembler.auth_key = Some(key);
-                            ingress_diagnostics.auth_key_loaded.store(true, Ordering::Relaxed);
+                            ingress_diagnostics
+                                .auth_key_loaded
+                                .store(true, Ordering::Relaxed);
                         }
                         next_auth_reload = now + AUTH_RELOAD_INTERVAL;
                     }
                     match socket.recv_from(&mut datagram) {
                         Ok((length, source)) => {
-                            ingress_diagnostics.udp_received.fetch_add(1, Ordering::Relaxed);
+                            ingress_diagnostics
+                                .udp_received
+                                .fetch_add(1, Ordering::Relaxed);
                             let packet = &datagram[..length];
                             let heartbeat_packet = packet.starts_with(b"EIHB");
                             let playback_packet = packet.len() >= 4 && &packet[..3] == b"EIP";
                             if heartbeat_packet {
-                                ingress_diagnostics.heartbeat_received.fetch_add(1, Ordering::Relaxed);
+                                ingress_diagnostics
+                                    .heartbeat_received
+                                    .fetch_add(1, Ordering::Relaxed);
                                 if let Some(key) = assembler.auth_key.as_ref() {
                                     match playback.handle_heartbeat(packet, source, key, &socket) {
                                         HeartbeatResponse::Invalid => {}
                                         HeartbeatResponse::SendFailed => {
-                                            ingress_diagnostics.heartbeat_authenticated.fetch_add(1, Ordering::Relaxed);
-                                            ingress_diagnostics.mailbox_send_failed.fetch_add(1, Ordering::Relaxed);
+                                            ingress_diagnostics
+                                                .heartbeat_authenticated
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            ingress_diagnostics
+                                                .mailbox_send_failed
+                                                .fetch_add(1, Ordering::Relaxed);
                                         }
                                         HeartbeatResponse::Sent => {
-                                            ingress_diagnostics.heartbeat_authenticated.fetch_add(1, Ordering::Relaxed);
-                                            ingress_diagnostics.mailbox_sent.fetch_add(1, Ordering::Relaxed);
+                                            ingress_diagnostics
+                                                .heartbeat_authenticated
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            ingress_diagnostics
+                                                .mailbox_sent
+                                                .fetch_add(1, Ordering::Relaxed);
                                         }
                                     }
                                 }
                             } else if playback_packet {
-                                ingress_diagnostics.playback_received.fetch_add(1, Ordering::Relaxed);
+                                ingress_diagnostics
+                                    .playback_received
+                                    .fetch_add(1, Ordering::Relaxed);
                                 if let Some(key) = assembler.auth_key.as_ref() {
                                     playback.ingest(
                                         packet,
@@ -417,17 +451,44 @@ impl LanVoiceIngress {
                                     );
                                 }
                             } else {
+                                let audio_end = packet.starts_with(b"EIAE");
+                                if audio_end {
+                                    ingress_diagnostics
+                                        .audio_ends_received
+                                        .fetch_add(1, Ordering::Relaxed);
+                                } else if !packet.starts_with(b"EIAU") {
+                                    ingress_diagnostics
+                                        .other_udp_received
+                                        .fetch_add(1, Ordering::Relaxed);
+                                }
                                 match assembler.ingest(packet, source, Instant::now()) {
                                     Ok(()) => {
                                         if packet.starts_with(b"EIAU") {
-                                            ingress_diagnostics.audio_frames_accepted.fetch_add(1, Ordering::Relaxed);
+                                            ingress_diagnostics
+                                                .audio_frames_accepted
+                                                .fetch_add(1, Ordering::Relaxed);
                                         } else if packet.starts_with(b"EIAE") {
-                                            ingress_diagnostics.audio_ends_accepted.fetch_add(1, Ordering::Relaxed);
+                                            ingress_diagnostics
+                                                .audio_ends_accepted
+                                                .fetch_add(1, Ordering::Relaxed);
                                         }
                                     }
                                     Err(error) => {
+                                        if audio_end {
+                                            ingress_diagnostics
+                                                .audio_ends_rejected
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            if let Ok(mut last_error) = ingress_diagnostics
+                                                .last_audio_end_error
+                                                .lock()
+                                            {
+                                                *last_error = Some(error_code(&error));
+                                            }
+                                        }
                                         if matches!(error, LanVoiceError::Authentication) {
-                                            ingress_diagnostics.audio_auth_rejected.fetch_add(1, Ordering::Relaxed);
+                                            ingress_diagnostics
+                                                .audio_auth_rejected
+                                                .fetch_add(1, Ordering::Relaxed);
                                         }
                                         eprintln!("lan_voice_rejected={}", error_code(&error));
                                     }
@@ -446,22 +507,30 @@ impl LanVoiceIngress {
                         match capture {
                             Ok(capture) => match capture_sender.try_send(capture) {
                                 Ok(()) => {
-                                    ingress_diagnostics.captures_ready.fetch_add(1, Ordering::Relaxed);
+                                    ingress_diagnostics
+                                        .captures_ready
+                                        .fetch_add(1, Ordering::Relaxed);
                                 }
                                 Err(TrySendError::Full(_)) => {
-                                    ingress_diagnostics.captures_rejected.fetch_add(1, Ordering::Relaxed);
+                                    ingress_diagnostics
+                                        .captures_rejected
+                                        .fetch_add(1, Ordering::Relaxed);
                                     eprintln!("lan_voice_rejected=capture_queue_full");
                                 }
                                 Err(TrySendError::Disconnected(_)) => return,
                             },
                             Err(error) => {
-                                ingress_diagnostics.captures_rejected.fetch_add(1, Ordering::Relaxed);
+                                ingress_diagnostics
+                                    .captures_rejected
+                                    .fetch_add(1, Ordering::Relaxed);
                                 eprintln!("lan_voice_rejected={}", error_code(&error));
                             }
                         }
                     }
                     for error in assembler.expire_incomplete(Instant::now()) {
-                        ingress_diagnostics.captures_rejected.fetch_add(1, Ordering::Relaxed);
+                        ingress_diagnostics
+                            .captures_rejected
+                            .fetch_add(1, Ordering::Relaxed);
                         eprintln!("lan_voice_rejected={}", error_code(&error));
                     }
                     playback.tick(&socket, assembler.auth_key.as_ref(), &playback_event_sender);
@@ -494,12 +563,28 @@ impl LanVoiceIngress {
             udp_received: self.diagnostics.udp_received.load(Ordering::Relaxed),
             audio_auth_rejected: self.diagnostics.audio_auth_rejected.load(Ordering::Relaxed),
             heartbeat_received: self.diagnostics.heartbeat_received.load(Ordering::Relaxed),
-            heartbeat_authenticated: self.diagnostics.heartbeat_authenticated.load(Ordering::Relaxed),
+            heartbeat_authenticated: self
+                .diagnostics
+                .heartbeat_authenticated
+                .load(Ordering::Relaxed),
             mailbox_sent: self.diagnostics.mailbox_sent.load(Ordering::Relaxed),
             mailbox_send_failed: self.diagnostics.mailbox_send_failed.load(Ordering::Relaxed),
             playback_received: self.diagnostics.playback_received.load(Ordering::Relaxed),
-            audio_frames_accepted: self.diagnostics.audio_frames_accepted.load(Ordering::Relaxed),
+            audio_frames_accepted: self
+                .diagnostics
+                .audio_frames_accepted
+                .load(Ordering::Relaxed),
+            audio_ends_received: self.diagnostics.audio_ends_received.load(Ordering::Relaxed),
             audio_ends_accepted: self.diagnostics.audio_ends_accepted.load(Ordering::Relaxed),
+            audio_ends_rejected: self.diagnostics.audio_ends_rejected.load(Ordering::Relaxed),
+            other_udp_received: self.diagnostics.other_udp_received.load(Ordering::Relaxed),
+            last_audio_end_error: self
+                .diagnostics
+                .last_audio_end_error
+                .lock()
+                .ok()
+                .and_then(|error| *error)
+                .map(str::to_owned),
             captures_ready: self.diagnostics.captures_ready.load(Ordering::Relaxed),
             captures_rejected: self.diagnostics.captures_rejected.load(Ordering::Relaxed),
             asr_succeeded: self.diagnostics.asr_succeeded.load(Ordering::Relaxed),
@@ -512,15 +597,21 @@ impl LanVoiceIngress {
     }
 
     pub fn note_queue_inserted(&self) {
-        self.diagnostics.queue_inserted.fetch_add(1, Ordering::Relaxed);
+        self.diagnostics
+            .queue_inserted
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn note_queue_replayed(&self) {
-        self.diagnostics.queue_replayed.fetch_add(1, Ordering::Relaxed);
+        self.diagnostics
+            .queue_replayed
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn note_queue_rejected(&self) {
-        self.diagnostics.queue_rejected.fetch_add(1, Ordering::Relaxed);
+        self.diagnostics
+            .queue_rejected
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn try_recv(&self) -> Option<LanVoicePrompt> {
@@ -1151,7 +1242,10 @@ impl CaptureAssembler {
         }
         if !self.active.contains_key(&frame.session_id) {
             if frame.sequence > MAX_CAPTURE_GAP_FRAMES {
-                eprintln!("lan_voice_sequence_error=initial_gap first={}", frame.sequence);
+                eprintln!(
+                    "lan_voice_sequence_error=initial_gap first={}",
+                    frame.sequence
+                );
                 self.retire(frame.session_id);
                 return Err(LanVoiceError::InvalidSequence);
             }
@@ -1183,7 +1277,10 @@ impl CaptureAssembler {
                 .final_sequence
                 .is_some_and(|final_sequence| frame.sequence >= final_sequence)
         {
-            eprintln!("lan_voice_sequence_error=frame_identity_or_after_end slot={} next={} received={}", capture.identity.slot, capture.next_sequence, frame.sequence);
+            eprintln!(
+                "lan_voice_sequence_error=frame_identity_or_after_end slot={} next={} received={}",
+                capture.identity.slot, capture.next_sequence, frame.sequence
+            );
             self.active.remove(&frame.session_id);
             self.retire(frame.session_id);
             return Err(LanVoiceError::InvalidSequence);
@@ -1194,7 +1291,10 @@ impl CaptureAssembler {
         }
         let missing_frames = frame.sequence - capture.next_sequence;
         if missing_frames > MAX_CAPTURE_GAP_FRAMES {
-            eprintln!("lan_voice_sequence_error=frame_gap slot={} next={} received={}", capture.identity.slot, capture.next_sequence, frame.sequence);
+            eprintln!(
+                "lan_voice_sequence_error=frame_gap slot={} next={} received={}",
+                capture.identity.slot, capture.next_sequence, frame.sequence
+            );
             self.active.remove(&frame.session_id);
             self.retire(frame.session_id);
             return Err(LanVoiceError::InvalidSequence);
@@ -1242,7 +1342,10 @@ impl CaptureAssembler {
             || terminal.final_sequence < capture.next_sequence
             || terminal.final_sequence as usize * AUDIO_FRAME_BYTES > MAX_CAPTURE_BYTES
         {
-            eprintln!("lan_voice_sequence_error=end_identity_or_range slot={} next={} final={}", capture.identity.slot, capture.next_sequence, terminal.final_sequence);
+            eprintln!(
+                "lan_voice_sequence_error=end_identity_or_range slot={} next={} final={}",
+                capture.identity.slot, capture.next_sequence, terminal.final_sequence
+            );
             self.active.remove(&terminal.session_id);
             self.retire(terminal.session_id);
             return Err(LanVoiceError::InvalidSequence);
@@ -1252,7 +1355,10 @@ impl CaptureAssembler {
                 capture.last_frame_at = now;
                 Ok(())
             } else {
-                eprintln!("lan_voice_sequence_error=end_conflict slot={} previous={} received={}", capture.identity.slot, existing, terminal.final_sequence);
+                eprintln!(
+                    "lan_voice_sequence_error=end_conflict slot={} previous={} received={}",
+                    capture.identity.slot, existing, terminal.final_sequence
+                );
                 self.active.remove(&terminal.session_id);
                 self.retire(terminal.session_id);
                 Err(LanVoiceError::InvalidSequence)
@@ -1260,7 +1366,10 @@ impl CaptureAssembler {
         }
         let missing_frames = terminal.final_sequence - capture.next_sequence;
         if missing_frames > MAX_CAPTURE_GAP_FRAMES {
-            eprintln!("lan_voice_sequence_error=end_gap slot={} next={} final={}", capture.identity.slot, capture.next_sequence, terminal.final_sequence);
+            eprintln!(
+                "lan_voice_sequence_error=end_gap slot={} next={} final={}",
+                capture.identity.slot, capture.next_sequence, terminal.final_sequence
+            );
             self.active.remove(&terminal.session_id);
             self.retire(terminal.session_id);
             return Err(LanVoiceError::InvalidSequence);
@@ -1317,7 +1426,10 @@ impl CaptureAssembler {
         idle.into_iter()
             .filter_map(|session| {
                 let capture = self.active.remove(&session)?;
-                eprintln!("lan_voice_sequence_error=timeout slot={} next={} final={:?}", capture.identity.slot, capture.next_sequence, capture.final_sequence);
+                eprintln!(
+                    "lan_voice_sequence_error=timeout slot={} next={} final={:?}",
+                    capture.identity.slot, capture.next_sequence, capture.final_sequence
+                );
                 self.retire(session);
                 Some(LanVoiceError::InvalidSequence)
             })
@@ -1351,42 +1463,74 @@ impl HybridTranscriber {
     }
 
     fn transcribe(&self, capture: CompletedCapture) -> Result<LanVoicePrompt, LanVoiceError> {
+        #[cfg(windows)]
+        {
+            let key = crate::windows_credential::read_minimax_key()
+                .map_err(|_| LanVoiceError::AsrUnavailable)?;
+            if let Some(key) = key {
+                let wav = encode_wav(&capture.pcm)?;
+                let client = MiniMaxVoiceClient::new().map_err(map_minimax_asr_error)?;
+                let text = client
+                    .transcribe_wav(&key, &wav)
+                    .map_err(map_minimax_asr_error)?;
+                eprintln!(
+                    "lan_voice_asr=minimax model={} slot={}",
+                    crate::minimax::ASR_MODEL,
+                    capture.identity.slot
+                );
+                return prompt_from_capture(&capture, text);
+            }
+            return self.whisper.transcribe(&capture);
+        }
         #[cfg(unix)]
         let credential_configured = match fs::symlink_metadata(&self.dashscope_env) {
             Ok(_) => true,
             Err(error) if error.kind() == io::ErrorKind::NotFound => false,
             Err(_) => return Err(LanVoiceError::AsrFailed),
         };
-        #[cfg(windows)]
-        let credential_configured = crate::windows_credential::read_dashscope_key()
-            .map_err(|_| LanVoiceError::AsrFailed)?
-            .is_some();
-        if credential_configured {
-            let secret = load_dashscope_env_secret(&self.dashscope_env)
-                .map_err(|_| LanVoiceError::AsrFailed)?;
-            let mut wav = encode_wav(&capture.pcm)?;
-            let qwen_result = self.qwen.transcribe_wav(&secret, &wav);
-            wav.fill(0);
-            match qwen_result {
-                Ok(transcript) => {
-                    eprintln!(
-                        "lan_voice_asr={} transport={} slot={}",
-                        transcript.model, transcript.transport, capture.identity.slot
-                    );
-                    return prompt_from_capture(&capture, transcript.text);
-                }
-                Err(error) => {
-                    if !qwen_error_allows_offline_fallback(error) {
-                        eprintln!("lan_voice_asr_error={}", asr_error_code(error));
-                        return Err(map_qwen_error(error));
+        #[cfg(unix)]
+        {
+            if credential_configured {
+                let secret = load_dashscope_env_secret(&self.dashscope_env)
+                    .map_err(|_| LanVoiceError::AsrFailed)?;
+                let mut wav = encode_wav(&capture.pcm)?;
+                let qwen_result = self.qwen.transcribe_wav(&secret, &wav);
+                wav.fill(0);
+                match qwen_result {
+                    Ok(transcript) => {
+                        eprintln!(
+                            "lan_voice_asr={} transport={} slot={}",
+                            transcript.model, transcript.transport, capture.identity.slot
+                        );
+                        return prompt_from_capture(&capture, transcript.text);
                     }
-                    eprintln!("lan_voice_asr_fallback={}", asr_error_code(error));
+                    Err(error) => {
+                        if !qwen_error_allows_offline_fallback(error) {
+                            eprintln!("lan_voice_asr_error={}", asr_error_code(error));
+                            return Err(map_qwen_error(error));
+                        }
+                        eprintln!("lan_voice_asr_fallback={}", asr_error_code(error));
+                    }
                 }
+            } else {
+                eprintln!("lan_voice_asr_fallback=credential_missing");
             }
-        } else {
-            eprintln!("lan_voice_asr_fallback=credential_missing");
+            self.whisper.transcribe(&capture)
         }
-        self.whisper.transcribe(&capture)
+    }
+}
+
+#[cfg(windows)]
+fn map_minimax_asr_error(error: MiniMaxVoiceError) -> LanVoiceError {
+    match error {
+        MiniMaxVoiceError::Rejected => LanVoiceError::RemoteAsrRejected,
+        MiniMaxVoiceError::InvalidRequest | MiniMaxVoiceError::AudioLimit => {
+            LanVoiceError::RemoteAsrInvalidAudio
+        }
+        MiniMaxVoiceError::Protocol => LanVoiceError::RemoteAsrProtocol,
+        MiniMaxVoiceError::RateLimited
+        | MiniMaxVoiceError::Unavailable
+        | MiniMaxVoiceError::AmbiguousAfterCommit => LanVoiceError::AsrUnavailable,
     }
 }
 

@@ -642,13 +642,13 @@ impl StateStore {
         &self,
         task_id: &str,
         generation: u64,
-    ) -> Result<Option<(String, Option<String>)>, StoreError> {
+    ) -> Result<Option<(String, Option<String>, i64)>, StoreError> {
         Ok(self.connection.query_row(
-            "SELECT state, failure_kind FROM jobs
+            "SELECT state, failure_kind, updated_at FROM jobs
              WHERE task_id = ?1 AND generation = ?2
              ORDER BY sequence DESC LIMIT 1",
             params![task_id, to_i64(generation)?],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?)
     }
 
@@ -1009,6 +1009,31 @@ impl StateStore {
             transaction.commit()?;
             return Ok(None);
         };
+        if let Some(previous) = previous_generation {
+            let previous_state: Option<String> = transaction
+                .query_row(
+                    "SELECT state FROM summary_ledger WHERE task_id = ?1 AND generation = ?2",
+                    params![task_id, previous],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if matches!(previous_state.as_deref(), Some("heard" | "superseded")) {
+                // The old merge input is no longer unread. Leave its pending
+                // completions intact so a fresh claim can use current coverage.
+                transaction.execute(
+                    "UPDATE summary_ledger SET state = 'abandoned', claim_id = NULL,
+                     updated_at = unixepoch() WHERE task_id = ?1 AND generation = ?2
+                     AND state = 'interrupted' AND claim_id = ?3",
+                    params![task_id, generation, request_id],
+                )?;
+                transaction.execute(
+                    "DELETE FROM summary_tts_attempts WHERE task_id = ?1 AND generation = ?2",
+                    params![task_id, generation],
+                )?;
+                transaction.commit()?;
+                return Ok(None);
+            }
+        }
         let changed = transaction.execute(
             "UPDATE summary_ledger SET state = 'generating', updated_at = unixepoch()
              WHERE task_id = ?1 AND generation = ?2 AND state = 'interrupted'
@@ -3573,7 +3598,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_abandon_recovers_interrupted_claim_after_previous_summary_was_heard() {
+    fn automatically_recovers_interrupted_claim_after_previous_summary_was_heard() {
         const TASK: &str = "019fa972-5cfa-75e1-9008-0b17ade9a347";
         const FIRST: &str = "019fa972-5cfa-75e1-9008-0b17ade9a348";
         const SECOND: &str = "019fa972-5cfa-75e1-9008-0b17ade9a349";
@@ -3603,14 +3628,8 @@ mod tests {
         drop(store);
 
         let mut reopened = StateStore::open(&path).unwrap();
-        assert!(matches!(
-            reopened.resume_interrupted_summary(TASK),
-            Err(StoreError::InvalidSummaryState)
-        ));
-        assert_eq!(
-            reopened.abandon_interrupted_summary_for_task(TASK).unwrap(),
-            Some(2)
-        );
+        assert!(reopened.resume_interrupted_summary(TASK).unwrap().is_none());
+        assert!(reopened.summary_tts_attempt(&second).unwrap().is_none());
         assert_eq!(reopened.pending_summary_completion_count(TASK).unwrap(), 1);
         let replacement = claimed(reopened.claim_summary(TASK, "request-3").unwrap());
         assert_eq!(replacement.generation, 3);

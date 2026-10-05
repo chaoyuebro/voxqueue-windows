@@ -9,20 +9,25 @@ use std::time::{Duration, Instant};
 #[cfg(not(test))]
 use crate::cache::CacheLimits;
 use crate::cache::CacheStore;
+#[cfg(unix)]
 use crate::dashscope::DashScopeTtsClient;
+#[cfg(windows)]
+use crate::minimax::VoiceClient as MiniMaxVoiceClient;
 use crate::paths::AppPaths;
-#[cfg(not(test))]
-use crate::secrets::LocalCacheSecretStore;
-use crate::secrets::{ImportLock, KeychainAccounts, dashscope_key_is_installed};
 #[cfg(unix)]
 use crate::secrets::DashScopeEnvStore;
-#[cfg(windows)]
-use crate::secrets::WindowsDashScopeStore;
+#[cfg(not(test))]
+use crate::secrets::LocalCacheSecretStore;
+#[cfg(unix)]
+use crate::secrets::dashscope_key_is_installed;
+use crate::secrets::{ImportLock, KeychainAccounts};
 use crate::spark_runner::{SparkRunner, SparkRunnerConfig};
 use crate::store::StateStore;
-use crate::summary_orchestrator::{
-    DashScopeSummarySynthesizer, SummaryOrchestrator, SummaryRunOutcome,
-};
+#[cfg(unix)]
+use crate::summary_orchestrator::DashScopeSummarySynthesizer;
+#[cfg(windows)]
+use crate::summary_orchestrator::MiniMaxSummarySynthesizer;
+use crate::summary_orchestrator::{SummaryOrchestrator, SummaryRunOutcome};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const FAILURE_BACKOFF: Duration = Duration::from_secs(30);
@@ -52,38 +57,55 @@ pub fn run(
 struct Runtime {
     cache: Arc<CacheStore>,
     spark: SparkRunner,
+    #[cfg(unix)]
     tts_client: DashScopeTtsClient,
+    #[cfg(windows)]
+    tts_client: MiniMaxVoiceClient,
+    #[cfg(unix)]
     dashscope_env: TtsSecrets,
+    #[cfg(windows)]
+    minimax_key: zeroize::Zeroizing<Vec<u8>>,
+    #[cfg(unix)]
     accounts: KeychainAccounts,
 }
 
 #[cfg(unix)]
 type TtsSecrets = DashScopeEnvStore;
-#[cfg(windows)]
-type TtsSecrets = WindowsDashScopeStore;
 
 impl Runtime {
     fn open(paths: &AppPaths, cache: Arc<CacheStore>) -> Result<Self, String> {
-        let lock = ImportLock::acquire(&paths.runtime_directory.join("key-import.lock"))
-            .map_err(|error| error.to_string())?;
-        let accounts = KeychainAccounts::load_or_create(&paths.installation_id, &lock)
-            .map_err(|error| error.to_string())?;
-        #[cfg(unix)]
-        let dashscope_env = DashScopeEnvStore::new(paths.dashscope_env.clone(), &accounts);
         #[cfg(windows)]
-        let dashscope_env = WindowsDashScopeStore::new(&accounts);
-        if !dashscope_key_is_installed(&dashscope_env, &accounts)
-            .map_err(|error| error.to_string())?
         {
-            return Err("dashscope credential is missing".into());
+            let key = crate::windows_credential::read_minimax_key()
+                .map_err(|error| error.to_string())?
+                .ok_or("MiniMax credential is missing")?;
+            return Ok(Self {
+                cache,
+                spark: SparkRunner::new(SparkRunnerConfig::default()),
+                tts_client: MiniMaxVoiceClient::new().map_err(|error| error.to_string())?,
+                minimax_key: key,
+            });
         }
-        Ok(Self {
-            cache,
-            spark: SparkRunner::new(SparkRunnerConfig::default()),
-            tts_client: DashScopeTtsClient::default(),
-            dashscope_env,
-            accounts,
-        })
+        #[cfg(unix)]
+        {
+            let lock = ImportLock::acquire(&paths.runtime_directory.join("key-import.lock"))
+                .map_err(|error| error.to_string())?;
+            let accounts = KeychainAccounts::load_or_create(&paths.installation_id, &lock)
+                .map_err(|error| error.to_string())?;
+            let dashscope_env = DashScopeEnvStore::new(paths.dashscope_env.clone(), &accounts);
+            if !dashscope_key_is_installed(&dashscope_env, &accounts)
+                .map_err(|error| error.to_string())?
+            {
+                return Err("dashscope credential is missing".into());
+            }
+            Ok(Self {
+                cache,
+                spark: SparkRunner::new(SparkRunnerConfig::default()),
+                tts_client: DashScopeTtsClient::default(),
+                dashscope_env,
+                accounts,
+            })
+        }
     }
 }
 
@@ -135,10 +157,16 @@ fn run_ready(
             {
                 continue;
             }
+            #[cfg(unix)]
             let tts = DashScopeSummarySynthesizer {
                 client: &runtime.tts_client,
                 secrets: &runtime.dashscope_env,
                 accounts: &runtime.accounts,
+            };
+            #[cfg(windows)]
+            let tts = MiniMaxSummarySynthesizer {
+                client: &runtime.tts_client,
+                key: &runtime.minimax_key,
             };
             let request_id = format!("auto-{}", uuid::Uuid::new_v4());
             let result = {

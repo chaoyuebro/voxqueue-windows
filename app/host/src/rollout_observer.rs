@@ -2277,6 +2277,7 @@ mod tests {
             rollout_path: path.to_path_buf(),
             updated_at_ms: 1,
             pinned: true,
+            cli_created: true,
         }
     }
 

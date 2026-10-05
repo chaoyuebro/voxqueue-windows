@@ -93,7 +93,7 @@ where
     let artifacts = encode_tts_audio(tts.pcm())?;
     let manifest = TtsCacheManifest {
         schema: TTS_CACHE_MANIFEST_SCHEMA,
-        requested_model: TTS_MODEL.to_owned(),
+        requested_model: tts.receipt().model.to_owned(),
         served_model: tts.receipt().model.to_owned(),
         voice: tts.receipt().voice.clone(),
         response_format: "pcm".to_owned(),
@@ -211,7 +211,10 @@ fn validate_cached_manifest(
     published: &crate::cache::DecryptedCacheBundle,
 ) -> Result<(), TtsCacheError> {
     drop(Zeroizing::new(manifest.summary.canonical_json()?));
-    let current_model = manifest.requested_model == TTS_MODEL && manifest.served_model == TTS_MODEL;
+    let current_model = matches!(
+        manifest.requested_model.as_str(),
+        TTS_MODEL | crate::minimax::TTS_MODEL
+    ) && manifest.served_model == manifest.requested_model;
     let legacy_model = manifest.requested_model == LEGACY_TTS_MODEL
         && matches!(
             manifest.served_model.as_str(),
@@ -248,7 +251,7 @@ fn validate_cached_manifest(
 fn validate_manifest(manifest: &TtsCacheManifest, tts: &TtsAudio) -> Result<(), TtsCacheError> {
     drop(Zeroizing::new(manifest.summary.canonical_json()?));
     if manifest.schema != TTS_CACHE_MANIFEST_SCHEMA
-        || manifest.requested_model != TTS_MODEL
+        || manifest.requested_model != tts.receipt().model
         || manifest.served_model != tts.receipt().model
         || manifest.voice != tts.receipt().voice
         || manifest.response_format != "pcm"

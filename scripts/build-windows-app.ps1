@@ -30,7 +30,7 @@ try {
     } finally {
         Pop-Location
     }
-    Get-FileHash -LiteralPath (Join-Path $projectRoot 'target\release\bundle\nsis\Codex Keyboard_0.1.0_x64-setup.exe') -Algorithm SHA256 |
+    Get-FileHash -LiteralPath (Join-Path $projectRoot 'target\release\bundle\nsis\VoxQueue_0.1.0_x64-setup.exe') -Algorithm SHA256 |
         Select-Object -ExpandProperty Hash
 } finally {
     Pop-Location

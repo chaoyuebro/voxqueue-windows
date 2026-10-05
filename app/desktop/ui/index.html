@@ -3,137 +3,128 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light dark" />
-    <title>Codex Keyboard</title>
+    <meta name="color-scheme" content="light" />
+    <title>VoxQueue</title>
     <link rel="stylesheet" href="./styles.css" />
     <script type="module" src="./main.js"></script>
   </head>
   <body>
-    <main class="shell">
-      <header class="titlebar">
-        <div>
-          <p class="eyebrow">LOCAL WI-FI</p>
-          <h1>Codex Keyboard</h1>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">VOXQUEUE</div>
+        <nav class="top-nav" aria-label="当前页面"><span class="top-nav-active">语音键盘</span></nav>
+        <div class="top-actions">
+          <span class="top-connection"><span id="top-status-dot"></span><span id="top-status-label">连接中</span></span>
+          <button id="refresh" class="icon-button" type="button" aria-label="刷新状态" title="刷新状态">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18">
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+              <path d="M8 16H3v5" />
+            </svg>
+          </button>
         </div>
-        <button
-          id="refresh"
-          class="icon-button"
-          type="button"
-          aria-label="刷新 Host 状态"
-          title="刷新"
-        >
-          <svg
-            aria-hidden="true"
-            data-icon-source="lucide:refresh-cw"
-            viewBox="0 0 24 24"
-            width="18"
-            height="18"
-          >
-            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-            <path d="M21 3v5h-5" />
-            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-            <path d="M8 16H3v5" />
-          </svg>
-        </button>
       </header>
 
-      <section id="status-band" class="status-band checking" aria-live="polite">
-        <span id="status-dot" class="status-dot checking"></span>
-        <div>
-          <p id="status-title" class="status-title">正在连接 Host</p>
-          <p id="status-detail" class="status-detail">等待本地 health socket</p>
-        </div>
-      </section>
+      <div class="workspace">
+        <aside class="sidebar" aria-label="设备状态">
+          <p class="side-heading">工作台</p>
+          <a class="side-link active" href="#keyboard-overview">▦ <span>键盘总览</span></a>
+          <a class="side-link" href="#binding-title">⌁ <span>槽位绑定</span></a>
+          <a class="side-link" href="#provider-title">◉ <span>语音服务</span></a>
+          <a class="side-link" href="#diagnostics-title">≡ <span>设备诊断</span></a>
 
-      <section class="binding-section" aria-labelledby="binding-title">
-        <div class="section-heading">
-          <h2 id="binding-title">四槽绑定</h2>
-          <span id="task-count" class="task-count">-- 个任务</span>
-        </div>
-        <div id="slots" class="slots" aria-live="polite"></div>
-      </section>
+          <section id="status-band" class="status-band checking" aria-live="polite">
+            <span id="status-dot" class="status-dot checking"></span>
+            <div>
+              <p id="status-title" class="status-title">正在连接 Host</p>
+              <p id="status-detail" class="status-detail">等待本地服务</p>
+            </div>
+          </section>
 
-      <section class="provider-band" aria-labelledby="provider-title">
-        <div class="provider-heading">
-          <span id="provider-dot" class="provider-dot"></span>
-          <h2 id="provider-title">DashScope</h2>
-          <span id="provider-state">检测中</span>
-        </div>
-        <dl class="provider-facts">
-          <div>
-            <dt>ASR</dt>
-            <dd id="asr-model">--</dd>
+          <section class="provider-band" aria-labelledby="provider-title">
+            <div class="provider-heading"><span id="provider-dot" class="provider-dot"></span><h2 id="provider-title">语音服务</h2></div>
+            <p id="provider-state" class="provider-state">检测中</p>
+            <dl class="provider-facts">
+              <div><dt>服务</dt><dd id="provider-name">--</dd></div>
+              <div><dt>识别</dt><dd id="asr-model">--</dd></div>
+              <div><dt>合成</dt><dd id="tts-model">--</dd></div>
+              <div><dt>音色</dt><dd id="tts-voice">--</dd></div>
+            </dl>
+          </section>
+        </aside>
+
+        <section id="keyboard-overview" class="keyboard-overview" aria-labelledby="overview-title">
+          <div class="overview-header">
+            <p class="eyebrow">EASYINPUT V2 · LOCAL WI-FI</p>
+            <h1 id="overview-title">VoxQueue</h1>
+            <p>上排按住说话，松开发送；下排短按播放对应槽位的总结。</p>
           </div>
-          <div>
-            <dt>TTS</dt>
-            <dd id="tts-model">--</dd>
+          <div class="keyboard-stage">
+            <div class="keyboard-device" aria-label="EasyInput V2 八键示意图">
+              <div class="device-keys">
+                <button class="device-key selected" type="button" data-key-slot="1" aria-label="查看槽位 1 设置" aria-pressed="true"><span>1</span><small>说话</small></button>
+                <button class="device-key" type="button" data-key-slot="2" aria-label="查看槽位 2 设置" aria-pressed="false"><span>2</span><small>说话</small></button>
+                <button class="device-key" type="button" data-key-slot="3" aria-label="查看槽位 3 设置" aria-pressed="false"><span>3</span><small>说话</small></button>
+                <button class="device-key" type="button" data-key-slot="4" aria-label="查看槽位 4 设置" aria-pressed="false"><span>4</span><small>说话</small></button>
+                <button class="device-key" type="button" data-key-slot="1" aria-label="查看槽位 1 的总结设置" aria-pressed="false"><span>5</span><small>总结</small></button>
+                <button class="device-key" type="button" data-key-slot="2" aria-label="查看槽位 2 的总结设置" aria-pressed="false"><span>6</span><small>总结</small></button>
+                <button class="device-key" type="button" data-key-slot="3" aria-label="查看槽位 3 的总结设置" aria-pressed="false"><span>7</span><small>总结</small></button>
+                <button class="device-key" type="button" data-key-slot="4" aria-label="查看槽位 4 的总结设置" aria-pressed="false"><span>8</span><small>总结</small></button>
+              </div>
+              <div class="device-control" aria-hidden="true">
+                <div class="device-knob"></div>
+                <div class="device-leds"><i data-led="1"></i><i data-led="2"></i><i data-led="3"></i><i data-led="4"></i><i data-led="5"></i></div>
+                <div class="device-mic"></div>
+              </div>
+            </div>
+            <p class="device-caption"><strong>槽位 <span id="selected-slot-number">1</span></strong><span class="caption-divider"></span><span id="selected-slot-caption">S1 说话 · S5 听总结</span></p>
           </div>
-          <div>
-            <dt>音色</dt>
-            <dd id="tts-voice">--</dd>
+          <div class="overview-footer">
+            <span><i class="footer-dot"></i>设备与电脑通过本地网络连接</span>
+            <span id="last-updated">尚未收到状态</span>
           </div>
-        </dl>
-      </section>
+        </section>
 
-      <dl class="facts">
-        <div class="fact-row">
-          <dt>Host</dt>
-          <dd>
-            <span id="host-version">--</span> · PID
-            <span id="host-pid">--</span>
-          </dd>
-        </div>
-        <div class="fact-row">
-          <dt>本地状态</dt>
-          <dd>
-            <span id="host-socket">run/host.sock</span> · DB
-            <span id="database-schema">--</span>
-          </dd>
-        </div>
-        <div class="fact-row">
-          <dt>设备网络</dt>
-          <dd id="lan-diagnostics">等待 Host 诊断</dd>
-        </div>
-      </dl>
-
-      <footer>
-        <span id="last-updated">尚未收到状态</span>
-        <span>关闭窗口不会停止 Host</span>
-      </footer>
+        <aside class="editor-panel" aria-labelledby="binding-title">
+          <div class="editor-heading">
+            <p class="eyebrow">VOICE SLOTS</p>
+            <h2 id="binding-title">四槽任务绑定</h2>
+            <p>将每组说话键与播报键绑定到一个 Codex 对话。</p>
+            <span id="task-count" class="task-count">-- 个任务</span>
+          </div>
+          <div id="slots" class="slots" aria-live="polite"></div>
+          <details class="diagnostics">
+            <summary id="diagnostics-title">设备诊断 <span>查看网络与任务计数</span></summary>
+            <dl class="facts">
+              <div class="fact-row"><dt>Host</dt><dd><span id="host-version">--</span> · PID <span id="host-pid">--</span></dd></div>
+              <div class="fact-row"><dt>本地状态</dt><dd><span id="host-socket">run/host.sock</span> · DB <span id="database-schema">--</span></dd></div>
+              <div class="fact-row"><dt>设备网络</dt><dd id="lan-diagnostics">等待 Host 诊断</dd></div>
+            </dl>
+          </details>
+          <p class="panel-footer">关闭窗口不会停止 Host</p>
+        </aside>
+      </div>
     </main>
 
     <template id="slot-template">
       <div class="slot-row">
-        <div class="key-pair" aria-hidden="true">
-          <kbd class="talk-key"></kbd>
-          <kbd class="play-key"></kbd>
+        <div class="slot-card-header">
+          <div class="key-pair" aria-hidden="true"><kbd class="talk-key"></kbd><kbd class="play-key"></kbd></div>
+          <label class="slot-label"></label>
         </div>
         <div class="slot-content">
-          <label class="slot-label"></label>
           <select class="task-select" aria-label=""></select>
-          <p class="slot-meta"></p>
+          <div class="slot-actions">
+            <button class="open-button icon-button" type="button" aria-label="" title="在 Codex 中打开">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" /></svg>
+            </button>
+            <button class="bind-button icon-button" type="button" aria-label="" title="绑定">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+            </button>
+          </div>
         </div>
-        <button
-          class="bind-button icon-button"
-          type="button"
-          aria-label=""
-          title="绑定"
-        >
-          <svg
-            aria-hidden="true"
-            data-icon-source="lucide:link"
-            viewBox="0 0 24 24"
-            width="17"
-            height="17"
-          >
-            <path
-              d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
-            />
-            <path
-              d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
-            />
-          </svg>
-        </button>
+        <p class="slot-meta"></p>
       </div>
     </template>
   </body>

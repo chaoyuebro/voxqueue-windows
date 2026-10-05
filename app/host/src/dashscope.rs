@@ -202,6 +202,13 @@ impl TtsAudio {
         &self.receipt
     }
 
+    pub(crate) fn from_provider(pcm: Vec<u8>, receipt: TtsReceipt) -> Self {
+        Self {
+            pcm: Zeroizing::new(pcm),
+            receipt,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test(pcm: Vec<u8>, receipt: TtsReceipt) -> Self {
         Self {
@@ -2070,7 +2077,11 @@ impl DeadlineSocket {
                 })?;
             #[cfg(unix)]
             {
-                let events = if writable { libc::POLLOUT } else { libc::POLLIN };
+                let events = if writable {
+                    libc::POLLOUT
+                } else {
+                    libc::POLLIN
+                };
                 let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
                 let mut descriptor = libc::pollfd {
                     fd: std::os::fd::AsRawFd::as_raw_fd(&self.inner),

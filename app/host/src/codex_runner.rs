@@ -27,6 +27,8 @@ const OUTPUT_INVALID: u8 = 1;
 const OUTPUT_TOO_LARGE: u8 = 2;
 pub const SUPERVISOR_CLI_MISSING_EXIT: i32 = 78;
 pub const SUPERVISOR_IO_EXIT: i32 = 79;
+#[cfg(windows)]
+const WINDOWS_CODEX_MODEL: &str = "gpt-6-sol";
 
 #[derive(Debug, Clone)]
 pub struct CodexRunnerConfig {
@@ -59,29 +61,26 @@ pub(crate) fn discover_codex_executable() -> PathBuf {
             return configured;
         }
     }
+    // The desktop launcher redirects LOCALAPPDATA to its private data root
+    // when starting Host. USERPROFILE still locates the user's Codex install.
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        let app_bin = PathBuf::from(profile).join("AppData/Local/OpenAI/Codex/bin");
+        if let Some(binary) = find_codex_in_app_bin(&app_bin) {
+            return binary;
+        }
+    }
+    if let Some(local_appdata) = std::env::var_os("LOCALAPPDATA") {
+        let app_bin = PathBuf::from(local_appdata).join("OpenAI/Codex/bin");
+        if let Some(binary) = find_codex_in_app_bin(&app_bin) {
+            return binary;
+        }
+    }
     // Desktop releases can ship a newer CLI than an older npm install. The
     // app-owned task store may reject the model selected by that older CLI.
     if let Some(path) = std::env::var_os("PATH") {
         for directory in std::env::split_paths(&path) {
             let binary = directory.join("codex.exe");
             if binary.is_file() {
-                return binary;
-            }
-        }
-    }
-    if let Some(local_appdata) = std::env::var_os("LOCALAPPDATA") {
-        let app_bin = PathBuf::from(local_appdata).join("OpenAI/Codex/bin");
-        if let Ok(entries) = std::fs::read_dir(app_bin) {
-            let mut candidates = entries
-                .take(32)
-                .filter_map(Result::ok)
-                .map(|entry| entry.path().join("codex.exe"))
-                .filter(|path| path.is_file())
-                .collect::<Vec<_>>();
-            candidates.sort_by_key(|path| {
-                path.metadata().and_then(|metadata| metadata.modified()).ok()
-            });
-            if let Some(binary) = candidates.pop() {
                 return binary;
             }
         }
@@ -103,6 +102,29 @@ pub(crate) fn discover_codex_executable() -> PathBuf {
         }
     }
     PathBuf::from("codex.exe")
+}
+
+#[cfg(windows)]
+fn find_codex_in_app_bin(app_bin: &Path) -> Option<PathBuf> {
+    let mut candidates = std::fs::read_dir(app_bin)
+        .ok()?
+        .take(64)
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                path.join("codex.exe")
+            } else {
+                path
+            }
+        })
+        .filter(|path| {
+            path.file_name().is_some_and(|name| name.eq_ignore_ascii_case("codex.exe"))
+                && path.is_file()
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|path| path.metadata().and_then(|metadata| metadata.modified()).ok());
+    candidates.pop()
 }
 
 #[cfg(not(windows))]
@@ -198,7 +220,17 @@ impl CodexRunner {
             command
         } else {
             let mut command = Command::new(&self.config.executable);
-            command.args(["exec", "resume", "--json"]);
+            command.arg("exec");
+            #[cfg(windows)]
+            {
+                // Keep Host's CLI model stable when the desktop user's default
+                // changes to a model unavailable to ChatGPT-authenticated CLI.
+                command.args(["--model", WINDOWS_CODEX_MODEL]);
+                // CLI resume does not retain the sandbox selected when the task
+                // was created. Permit edits only in the task's validated cwd.
+                command.args(["--sandbox", "workspace-write"]);
+            }
+            command.args(["resume", "--json"]);
             #[cfg(windows)]
             if !job.cwd.ancestors().any(|directory| directory.join(".git").exists()) {
                 // Projectless Codex tasks have a real, allowlisted working

@@ -8,6 +8,7 @@ pub mod health;
 pub mod lan_playback;
 pub mod lan_voice;
 pub mod launch_agent;
+pub mod minimax;
 #[cfg(unix)]
 pub mod paths;
 #[cfg(windows)]

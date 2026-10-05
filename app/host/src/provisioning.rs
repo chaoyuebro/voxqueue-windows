@@ -342,6 +342,8 @@ fn provision_lan_hid(config: &LanProvisioning) -> Result<ProvisioningReceipt, Pr
                 device.vendor_id(),
                 device.product_id(),
                 device.interface_number(),
+                device.usage_page(),
+                device.usage(),
             )
         })
         .collect::<Vec<_>>();
@@ -388,17 +390,31 @@ fn provision_lan_hid(config: &LanProvisioning) -> Result<ProvisioningReceipt, Pr
 }
 
 #[cfg(any(target_os = "macos", windows, test))]
-fn is_easy_input_usb_interface(vendor_id: u16, product_id: u16, interface: i32) -> bool {
+fn is_easy_input_usb_interface(
+    vendor_id: u16,
+    product_id: u16,
+    interface: i32,
+    usage_page: u16,
+    usage: u16,
+) -> bool {
     vendor_id == EASY_INPUT_USB_VID
         && product_id == EASY_INPUT_USB_PID
-        && (interface == EASY_INPUT_USB_INTERFACE || interface == -1)
+        && (interface == EASY_INPUT_USB_INTERFACE || (cfg!(target_os = "macos") && interface == -1))
+        && usage_page == 0xFF00
+        && usage == 0x02
 }
 
 #[cfg(any(target_os = "macos", windows))]
 pub fn easy_input_usb_count() -> Result<usize, ProvisioningError> {
     let api = hidapi::HidApi::new().map_err(|_| ProvisioningError::Hid)?;
     Ok(api.device_list().filter(|device| {
-        is_easy_input_usb_interface(device.vendor_id(), device.product_id(), device.interface_number())
+        is_easy_input_usb_interface(
+            device.vendor_id(),
+            device.product_id(),
+            device.interface_number(),
+            device.usage_page(),
+            device.usage(),
+        )
     }).count())
 }
 
@@ -681,14 +697,15 @@ mod tests {
 
     #[test]
     fn usb_provisioning_matches_only_the_v2_management_interface() {
-        assert!(is_easy_input_usb_interface(0x303A, 0x1006, 0));
+        assert!(is_easy_input_usb_interface(0x303A, 0x1006, 0, 0xFF00, 2));
         #[cfg(target_os = "macos")]
-        assert!(is_easy_input_usb_interface(0x303A, 0x1006, -1));
+        assert!(is_easy_input_usb_interface(0x303A, 0x1006, -1, 0xFF00, 2));
         #[cfg(not(target_os = "macos"))]
-        assert!(!is_easy_input_usb_interface(0x303A, 0x1006, -1));
-        assert!(!is_easy_input_usb_interface(0x303A, 0x1006, 1));
-        assert!(!is_easy_input_usb_interface(0x303A, 0x1005, 0));
-        assert!(!is_easy_input_usb_interface(0xFFFF, 0x1006, 0));
+        assert!(!is_easy_input_usb_interface(0x303A, 0x1006, -1, 0xFF00, 2));
+        assert!(!is_easy_input_usb_interface(0x303A, 0x1006, 1, 0xFF00, 2));
+        assert!(!is_easy_input_usb_interface(0x303A, 0x1006, 0, 0x0001, 6));
+        assert!(!is_easy_input_usb_interface(0x303A, 0x1005, 0, 0xFF00, 2));
+        assert!(!is_easy_input_usb_interface(0xFFFF, 0x1006, 0, 0xFF00, 2));
     }
 
     #[test]

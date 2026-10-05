@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 #[cfg(any(target_os = "macos", windows))]
 use easy_codex_host::health::{
     DashboardSnapshot, HEALTH_SOCKET_NAME, HealthError, HealthSnapshot, bind_dashboard_slot,
@@ -32,8 +34,28 @@ enum DashboardProbe {
 fn app_paths() -> Option<AppPaths> {
     #[cfg(windows)]
     {
-        std::env::var_os("LOCALAPPDATA")
-            .map(|local| AppPaths::from_root(std::path::Path::new(&local).join("EasyCodexInput")))
+        let install_local = std::env::current_exe().ok().and_then(|exe| {
+            let install_dir = exe.parent()?;
+            if !install_dir
+                .file_name()?
+                .to_string_lossy()
+                .eq_ignore_ascii_case("Codex Keyboard")
+                && !install_dir
+                    .file_name()?
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("easyinput")
+                && !install_dir
+                    .file_name()?
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("VoxQueue")
+            {
+                return None;
+            }
+            Some(install_dir.parent()?.to_path_buf())
+        });
+        install_local
+            .or_else(|| std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from))
+            .map(|local| AppPaths::from_root(local.join("EasyCodexInput")))
     }
     #[cfg(not(windows))]
     {
@@ -65,11 +87,17 @@ fn host_health() -> HostProbe {
     };
     match query_health(&paths.runtime_directory.join(HEALTH_SOCKET_NAME)) {
         Ok(health) => HostProbe::Healthy { health },
-        Err(error) if is_offline(&error) => HostProbe::Offline {
-            reason: "host_unreachable",
-        },
-        Err(_) => HostProbe::ProtocolError {
-            reason: "health_invalid",
+        Err(error) => {
+            #[cfg(windows)]
+            let _ = std::fs::write(
+                paths.runtime_directory.join("desktop-last-error.txt"),
+                format!("health: {error:?}"),
+            );
+            if is_offline(&error) {
+                HostProbe::Offline { reason: "host_unreachable" }
+            } else {
+                HostProbe::ProtocolError { reason: "health_invalid" }
+            }
         },
     }
 }
@@ -88,7 +116,10 @@ fn host_dashboard() -> DashboardProbe {
             reason: "host_unreachable",
         },
         Err(error) => {
+            #[cfg(not(windows))]
             eprintln!("dashboard_probe_failed error={error}");
+            #[cfg(windows)]
+            let _ = error;
             DashboardProbe::ProtocolError {
                 reason: "dashboard_invalid",
             }
@@ -120,6 +151,76 @@ fn bind_slot(
 }
 
 #[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
+fn open_codex_task(task_id: String) -> Result<(), &'static str> {
+    let task_id = uuid::Uuid::parse_str(&task_id).map_err(|_| "invalid_task_id")?;
+    let url = format!("codex://threads/{task_id}");
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "Shell32")]
+        unsafe extern "system" {
+            fn ShellExecuteW(
+                hwnd: *mut std::ffi::c_void,
+                operation: *const u16,
+                file: *const u16,
+                parameters: *const u16,
+                directory: *const u16,
+                show: i32,
+            ) -> isize;
+        }
+        #[link(name = "User32")]
+        unsafe extern "system" {
+            fn FindWindowW(class_name: *const u16, window_name: *const u16)
+            -> *mut std::ffi::c_void;
+            fn ShowWindow(window: *mut std::ffi::c_void, command: i32) -> i32;
+            fn SetForegroundWindow(window: *mut std::ffi::c_void) -> i32;
+        }
+        let operation = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let url = std::ffi::OsStr::new(&url)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                url.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            )
+        };
+        if result <= 32 {
+            return Err("open_failed");
+        }
+        // Protocol activation may navigate an existing Codex window without
+        // raising it. The click in this window grants foreground permission.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let title = std::ffi::OsStr::new("ChatGPT")
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let window = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+        if !window.is_null() {
+            unsafe {
+                ShowWindow(window, 9);
+                SetForegroundWindow(window);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map_err(|_| "open_failed")?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", windows))]
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -136,6 +237,7 @@ fn main() {
                         eprintln!("bundled_host=missing");
                     } else if let Err(error) = Command::new(host)
                         .arg("daemon")
+                        .env("LOCALAPPDATA", paths.root.parent().unwrap_or(&paths.root))
                         .stdin(Stdio::null())
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
@@ -151,13 +253,14 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             host_health,
             host_dashboard,
-            bind_slot
+            bind_slot,
+            open_codex_task
         ])
         .run(tauri::generate_context!())
-        .expect("Codex Keyboard desktop runtime failed");
+        .expect("VoxQueue desktop runtime failed");
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
 fn main() {
-    println!("Codex Keyboard desktop requires macOS");
+    println!("VoxQueue desktop requires macOS or Windows");
 }

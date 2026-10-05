@@ -9,6 +9,7 @@ use std::io;
 use std::ptr;
 
 const TARGET: &str = "EasyCodexInput/DASHSCOPE_API_KEY";
+const MINIMAX_TARGET: &str = "EasyCodexInput/MINIMAX_API_KEY";
 const DEVICE_SECRET_TARGET: &str = "EasyCodexInput/DEVICE_SECRET_V1";
 const CRED_TYPE_GENERIC: u32 = 1;
 const CRED_PERSIST_LOCAL_MACHINE: u32 = 2;
@@ -66,14 +67,20 @@ fn read_credential(target_name: &str) -> io::Result<Option<Vec<u8>>> {
         };
     }
     if result.is_null() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "empty credential result"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "empty credential result",
+        ));
     }
     let _guard = CredentialGuard(result);
     // SAFETY: CredReadW returned a valid CREDENTIALW, kept alive by _guard.
     let record = unsafe { &*result };
     let length = record.blob_size as usize;
     if length == 0 || length > MAX_BLOB_BYTES || record.blob.is_null() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid credential size"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid credential size",
+        ));
     }
     // SAFETY: CredReadW allocated blob_size bytes inside its live result allocation.
     let bytes = unsafe { std::slice::from_raw_parts(record.blob, length) };
@@ -86,7 +93,10 @@ pub fn read_device_secret() -> io::Result<Option<[u8; 32]>> {
     };
     if bytes.len() != 32 || bytes.iter().all(|byte| *byte == 0) {
         bytes.fill(0);
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid device secret"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid device secret",
+        ));
     }
     let mut secret = [0_u8; 32];
     secret.copy_from_slice(&bytes);
@@ -96,13 +106,19 @@ pub fn read_device_secret() -> io::Result<Option<[u8; 32]>> {
 
 pub fn store_device_secret_once(secret: &[u8; 32]) -> io::Result<()> {
     if secret.iter().all(|byte| *byte == 0) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid device secret"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid device secret",
+        ));
     }
     if let Some(existing) = read_device_secret()? {
         return if existing == *secret {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::AlreadyExists, "different device secret exists"))
+            Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "different device secret exists",
+            ))
         };
     }
     let mut target: Vec<u16> = DEVICE_SECRET_TARGET.encode_utf16().chain(Some(0)).collect();
@@ -135,7 +151,10 @@ pub fn read_dashscope_key() -> io::Result<Option<Vec<u8>>> {
     let bytes = zeroize::Zeroizing::new(bytes);
     let length = bytes.len();
     if length % 2 != 0 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid credential size"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid credential size",
+        ));
     }
     let mut units = Vec::with_capacity(length / 2);
     for pair in bytes.chunks_exact(2) {
@@ -146,7 +165,38 @@ pub fn read_dashscope_key() -> io::Result<Option<Vec<u8>>> {
     units.fill(0);
     let text = text?;
     if !text.starts_with("sk-") || text.len() < 20 || text.chars().any(char::is_whitespace) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "credential format"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "credential format",
+        ));
     }
     Ok(Some(text.into_bytes()))
+}
+
+pub fn read_minimax_key() -> io::Result<Option<zeroize::Zeroizing<Vec<u8>>>> {
+    let Some(bytes) = read_credential(MINIMAX_TARGET)? else {
+        return Ok(None);
+    };
+    let bytes = zeroize::Zeroizing::new(bytes);
+    if bytes.len() % 2 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid credential size",
+        ));
+    }
+    let mut units = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        units.push(u16::from_le_bytes([pair[0], pair[1]]));
+    }
+    let text = String::from_utf16(&units)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "credential encoding"));
+    units.fill(0);
+    let text = text?;
+    if text.len() < 20 || text.len() > 2048 || !text.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "credential format",
+        ));
+    }
+    Ok(Some(zeroize::Zeroizing::new(text.into_bytes())))
 }

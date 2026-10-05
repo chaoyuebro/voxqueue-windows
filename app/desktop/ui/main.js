@@ -20,6 +20,8 @@ const elements = {
   dot: requiredElement("#status-dot"),
   title: requiredElement("#status-title"),
   detail: requiredElement("#status-detail"),
+  topStatusDot: requiredElement("#top-status-dot"),
+  topStatusLabel: requiredElement("#top-status-label"),
   version: requiredElement("#host-version"),
   pid: requiredElement("#host-pid"),
   socket: requiredElement("#host-socket"),
@@ -31,6 +33,8 @@ const elements = {
   ),
   taskCount: requiredElement("#task-count"),
   providerDot: requiredElement("#provider-dot"),
+  providerTitle: requiredElement("#provider-title"),
+  providerName: requiredElement("#provider-name"),
   providerState: requiredElement("#provider-state"),
   asrModel: requiredElement("#asr-model"),
   ttsModel: requiredElement("#tts-model"),
@@ -41,6 +45,24 @@ const elements = {
 /** @type {import("./view-model.js").DashboardSnapshot | null} */
 let dashboard = null;
 const dirtySlots = new Set();
+let selectedSlot = 1;
+let selectedKey = 1;
+
+/** @param {number} slot @param {number} [key] */
+function selectSlot(slot, key = slot) {
+  selectedSlot = slot;
+  selectedKey = key;
+  requiredElement("#selected-slot-number").textContent = String(slot);
+  requiredElement("#selected-slot-caption").textContent = `S${slot} 说话 · S${slot + 4} 听总结`;
+  for (const button of Array.from(document.querySelectorAll(".device-key"))) {
+    const active = Number(button.textContent?.trim().match(/^\d/)?.[0]) === key;
+    button.classList.toggle("selected", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  for (const row of Array.from(elements.slots.querySelectorAll(".slot-row"))) {
+    if (row instanceof HTMLElement) row.classList.toggle("selected", Number(row.dataset.slot) === slot);
+  }
+}
 
 /** @param {import("./view-model.js").HostView} view */
 function renderHealth(view) {
@@ -48,6 +70,8 @@ function renderHealth(view) {
   elements.dot.className = `status-dot ${view.tone}`;
   elements.title.textContent = view.title;
   elements.detail.textContent = view.detail;
+  elements.topStatusDot.className = view.tone;
+  elements.topStatusLabel.textContent = view.tone === "ready" ? "Host 已连接" : "Host 未连接";
   elements.version.textContent = view.version;
   elements.pid.textContent = view.pid;
   elements.socket.textContent = view.socket;
@@ -85,15 +109,24 @@ function renderDashboard(snapshot) {
   const tasks = sortedTasks(snapshot.tasks);
   elements.taskCount.textContent = `${tasks.length} 个任务`;
   elements.providerDot.className = `provider-dot ${snapshot.provider.configured ? "ready" : "offline"}`;
+  const providerName = snapshot.provider.region === "minimax-cn" ? "MiniMax" : "北京区";
+  elements.providerName.textContent = providerName;
   elements.providerState.textContent = snapshot.provider.configured
-    ? "北京区 · 已就绪"
-    : "北京区 · 未配置";
+    ? `${providerName} · 已就绪`
+    : `${providerName} · 未配置`;
   elements.asrModel.textContent = snapshot.provider.asr_model;
   elements.ttsModel.textContent = snapshot.provider.tts_model;
   elements.ttsVoice.textContent = snapshot.provider.voice;
   elements.lanDiagnostics.textContent = snapshot.lan
     ? `入站 ${snapshot.lan.udp_received} · 心跳 ${snapshot.lan.heartbeat_received}/${snapshot.lan.heartbeat_authenticated} · 信箱发送/失败 ${snapshot.lan.mailbox_sent}/${snapshot.lan.mailbox_send_failed} · 语音帧 ${snapshot.lan.audio_frames_accepted} · 结束包 ${snapshot.lan.audio_ends_accepted} · 完整录音 ${snapshot.lan.captures_ready} · 录音失败 ${snapshot.lan.captures_rejected} · 识别成功/失败 ${snapshot.lan.asr_succeeded}/${snapshot.lan.asr_failed} · 任务交付 ${snapshot.lan.prompts_delivered} · 入队/去重/拒绝 ${snapshot.lan.queue_inserted}/${snapshot.lan.queue_replayed}/${snapshot.lan.queue_rejected} · 语音认证拒绝 ${snapshot.lan.audio_auth_rejected} · 设备密钥${snapshot.lan.auth_key_loaded ? "已加载" : "缺失"}`
     : "Host 尚未提供诊断";
+  for (let index = 1; index <= 5; index += 1) {
+    const led = document.querySelector(`[data-led="${index}"]`);
+    if (!led) continue;
+    led.className = index === 5
+      ? (snapshot.slots.some((slot) => slot.pending_jobs > 0) ? "busy" : "")
+      : (snapshot.slots.find((slot) => slot.slot === index)?.unread_generation != null ? "unread" : "");
+  }
 
   const existingRows = new Map(
     Array.from(elements.slots.querySelectorAll(".slot-row")).map((row) => [
@@ -123,31 +156,43 @@ function renderDashboard(snapshot) {
       const button = /** @type {HTMLButtonElement} */ (
         childElement(newRow, ".bind-button")
       );
+      const openButton = /** @type {HTMLButtonElement} */ (
+        childElement(newRow, ".open-button")
+      );
       const selectId = `slot-${slot.slot}-task`;
       label.htmlFor = selectId;
       label.textContent = `槽位 ${slot.slot}`;
       select.id = selectId;
       select.ariaLabel = `槽位 ${slot.slot} Codex 任务`;
       button.ariaLabel = `绑定槽位 ${slot.slot}`;
-      select.addEventListener("change", () => dirtySlots.add(slot.slot));
+      openButton.ariaLabel = `在 Codex 中打开槽位 ${slot.slot} 的任务`;
+      select.addEventListener("change", () => {
+        dirtySlots.add(slot.slot);
+        openButton.disabled = !select.value;
+      });
       button.addEventListener("click", () => void bindSlot(slot.slot, newRow));
+      openButton.addEventListener("click", () => void openTask(newRow));
       elements.slots.append(newRow);
     }
+    row.classList.toggle("selected", slot.slot === selectedSlot);
     const select = /** @type {HTMLSelectElement} */ (
       childElement(row, ".task-select")
     );
     const selected = dirtySlots.has(slot.slot)
       ? select.value
       : (slot.task_id ?? "");
-    const optionSignature = tasks.map((task) => task.task_id).join("|");
+    const optionSignature = tasks
+      .map((task) => `${task.task_id}:${task.cli_created}`)
+      .join("|");
     if (select.dataset.options !== optionSignature) {
       select.replaceChildren(new Option("选择 Codex 任务", "", true, false));
       const placeholder = select.options.item(0);
       if (placeholder) placeholder.disabled = true;
       for (const task of tasks) {
         const marker = task.pinned ? "置顶 · " : "";
+        const origin = task.cli_created ? "CLI" : "桌面";
         select.add(
-          new Option(`${marker}${task.name} · ${task.project}`, task.task_id),
+          new Option(`${marker}${origin} · ${task.name} · ${task.project}`, task.task_id),
         );
       }
       select.dataset.options = optionSignature;
@@ -161,7 +206,38 @@ function renderDashboard(snapshot) {
       );
     }
     select.value = selected;
-    childElement(row, ".slot-meta").textContent = presentSlotStatus(slot);
+    /** @type {HTMLButtonElement} */ (
+      childElement(row, ".open-button")
+    ).disabled = !selected;
+    const selectedTask = tasks.find((task) => task.task_id === selected);
+    const status = presentSlotStatus(slot);
+    childElement(row, ".slot-meta").textContent =
+      selectedTask && !selectedTask.cli_created
+        ? `${status} · 桌面任务请在 Codex 中继续`
+        : status;
+  }
+  selectSlot(selectedSlot, selectedKey);
+}
+
+/** @param {HTMLElement} row */
+async function openTask(row) {
+  const select = /** @type {HTMLSelectElement} */ (
+    childElement(row, ".task-select")
+  );
+  if (!select.value) return;
+  const button = /** @type {HTMLButtonElement} */ (
+    childElement(row, ".open-button")
+  );
+  button.disabled = true;
+  try {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (!invoke) throw new Error("tauri_unavailable");
+    await invoke("open_codex_task", { taskId: select.value });
+  } catch {
+    row.classList.add("failed");
+    window.setTimeout(() => row.classList.remove("failed"), 1500);
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -211,9 +287,13 @@ async function refreshDashboard() {
   elements.taskCount.textContent = unavailable.taskCount;
   elements.providerDot.className = "provider-dot offline";
   elements.providerState.textContent = unavailable.providerState;
+  elements.providerName.textContent = "--";
   elements.asrModel.textContent = unavailable.asrModel;
   elements.ttsModel.textContent = unavailable.ttsModel;
   elements.ttsVoice.textContent = unavailable.voice;
+  for (const led of Array.from(document.querySelectorAll(".device-leds i"))) {
+    led.className = "";
+  }
 }
 
 async function refresh() {
@@ -222,15 +302,18 @@ async function refresh() {
   try {
     const invoke = window.__TAURI__?.core?.invoke;
     if (!invoke) throw new Error("tauri_unavailable");
-    const [probe] = await Promise.all([
-      invoke("host_health"),
-      refreshDashboard(),
-    ]);
+    const probe = await invoke("host_health");
     renderHealth(presentProbe(probe));
-  } catch {
+  } catch (error) {
     renderHealth(
       presentProbe({ connection: "offline", reason: "invoke_failed" }),
     );
+    elements.detail.textContent = `界面通信失败：${String(error)}`;
+  }
+  try {
+    await refreshDashboard();
+  } catch (error) {
+    elements.providerState.textContent = `任务列表读取失败：${String(error)}`;
   } finally {
     elements.refresh.disabled = false;
     elements.refresh.classList.remove("spinning");
@@ -238,5 +321,16 @@ async function refresh() {
 }
 
 elements.refresh.addEventListener("click", refresh);
+document.querySelector('a[href="#diagnostics-title"]')?.addEventListener("click", () => {
+  const diagnostics = document.querySelector(".diagnostics");
+  if (diagnostics instanceof HTMLDetailsElement) diagnostics.open = true;
+});
+for (const button of Array.from(document.querySelectorAll(".device-key"))) {
+  button.addEventListener("click", () => {
+    const key = Number(button.textContent?.trim().match(/^\d/)?.[0]);
+    const slot = Number(button.getAttribute("data-key-slot"));
+    if (Number.isInteger(key) && Number.isInteger(slot)) selectSlot(slot, key);
+  });
+}
 void refresh();
 window.setInterval(refresh, 3000);

@@ -13,6 +13,49 @@ use rusqlite::Connection;
 use serde_json::json;
 
 #[test]
+fn interrupted_summary_recovers_after_previous_audio_was_heard() {
+    use easy_codex_host::store::SummaryClaimResult;
+    const TASK: &str = "019fa972-5cfa-75e1-9008-0b17ade9a347";
+    const FIRST: &str = "019fa972-5cfa-75e1-9008-0b17ade9a348";
+    const SECOND: &str = "019fa972-5cfa-75e1-9008-0b17ade9a349";
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    let mut store = StateStore::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    let insert = |id: &str| {
+        connection.execute(
+            "INSERT INTO completion_ledger
+             (completion_id, task_id, rollout_cursor, observed_at, turn_pack)
+             VALUES (?1, ?2, 'fixture', unixepoch(), '{\"turn\":1}')",
+            rusqlite::params![id, TASK],
+        ).unwrap();
+    };
+    insert(FIRST);
+    let Some(SummaryClaimResult::Claimed(first)) = store.claim_summary(TASK, "first").unwrap() else {
+        panic!("expected first claim");
+    };
+    store.publish_summary(&first, &CacheId::for_task(TASK, 1).unwrap().reference()).unwrap();
+    insert(SECOND);
+    let Some(SummaryClaimResult::Claimed(second)) = store.claim_summary(TASK, "second").unwrap() else {
+        panic!("expected second claim");
+    };
+    store.begin_summary_tts_attempt(&second).unwrap();
+    store.mark_summary_tts_ambiguous(&second).unwrap();
+    connection.execute("UPDATE summary_ledger SET state = 'heard' WHERE task_id = ?1 AND generation = 1", [TASK]).unwrap();
+    drop(store);
+    let mut reopened = StateStore::open(&path).unwrap();
+    assert!(reopened.resume_interrupted_summary(TASK).unwrap().is_none());
+    assert!(reopened.summary_tts_attempt(&second).unwrap().is_none());
+    assert_eq!(reopened.pending_summary_completion_count(TASK).unwrap(), 1);
+    let Some(SummaryClaimResult::Claimed(replacement)) = reopened.claim_summary(TASK, "replacement").unwrap() else {
+        panic!("expected replacement claim");
+    };
+    assert_eq!(replacement.generation, 3);
+    assert!(replacement.previous_unread.is_none());
+    assert_eq!(replacement.completions[0].completion_id, SECOND);
+}
+
+#[test]
 fn failed_codex_turn_does_not_block_later_authoritative_completion() {
     const TASK: &str = "019fa972-5cfa-75e1-9008-0b17ade9a347";
     const FAILED: &str = "019fa972-5cfa-75e1-9008-0b17ade9a348";
@@ -47,6 +90,7 @@ fn failed_codex_turn_does_not_block_later_authoritative_completion() {
         rollout_path: rollout.clone(),
         updated_at_ms: 1,
         pinned: false,
+        cli_created: true,
     };
     let catalog = CodexTaskCatalog::from_paths(
         temporary.path().join("unused-codex"),

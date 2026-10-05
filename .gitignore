@@ -40,3 +40,7 @@ tools/**/.swiftpm/
 projects/*/svg_final/
 projects/*/validation/rendered-*/
 svg_quality_report.txt
+
+# Python intermediates
+__pycache__/
+*.py[cod]

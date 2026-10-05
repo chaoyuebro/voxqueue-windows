@@ -68,8 +68,48 @@ describe("desktop four-slot dashboard", () => {
         pending_jobs: 2,
         unread_generation: 3,
         unread_coverage: 5,
+        latest_job_state: null,
+        latest_job_failure: null,
+        latest_job_updated_at: null,
       }),
     ).toBe("队列 2 · 待听总结 5 次");
+  });
+
+  it("shows when a retained failure happened instead of implying a new failure", () => {
+    const status = presentSlotStatus({
+      slot: 1,
+      task_id: "019fa972-5cfa-75e1-9008-0b17ade9a347",
+      task_name: "Task A",
+      project: "Project A",
+      binding_generation: 2,
+      pending_jobs: 0,
+      unread_generation: null,
+      unread_coverage: null,
+      latest_job_state: "failed",
+      latest_job_failure: "exit_failure",
+      latest_job_updated_at: 1790503715,
+    });
+    expect(status).toContain("上次失败");
+    expect(status).toContain("exit_failure");
+    expect(status).not.toContain("最近任务失败");
+  });
+
+  it("shows an unread summary and a retained failure together", () => {
+    const status = presentSlotStatus({
+      slot: 1,
+      task_id: "019fa972-5cfa-75e1-9008-0b17ade9a347",
+      task_name: "Task A",
+      project: "Project A",
+      binding_generation: 2,
+      pending_jobs: 0,
+      unread_generation: 3,
+      unread_coverage: 1,
+      latest_job_state: "failed",
+      latest_job_failure: "exit_failure",
+      latest_job_updated_at: 1790503715,
+    });
+    expect(status).toContain("待听总结 1 次");
+    expect(status).toContain("上次失败");
   });
 
   it("orders pinned tasks before recent tasks without mutating the source", () => {
@@ -80,6 +120,7 @@ describe("desktop four-slot dashboard", () => {
         project: "P",
         updated_at_ms: 20,
         pinned: false,
+        cli_created: true,
       },
       {
         task_id: "a",
@@ -87,6 +128,7 @@ describe("desktop four-slot dashboard", () => {
         project: "P",
         updated_at_ms: 10,
         pinned: true,
+        cli_created: true,
       },
     ];
     expect(sortedTasks(tasks).map((task) => task.task_id)).toEqual(["a", "b"]);

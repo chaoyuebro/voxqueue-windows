@@ -26,6 +26,7 @@ rustls-native-certs.workspace = true
 sha1.workspace = true
 signal-hook.workspace = true
 tempfile.workspace = true
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework.workspace = true
