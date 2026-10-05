@@ -9,6 +9,12 @@
 html, body { margin: 0; min-width: 960px; min-height: 680px; }
 button, select { font: inherit; }
 button { cursor: pointer; }
+.clear-queue-button { margin-left: auto; padding: 4px 8px; border: 1px solid #c7826b; border-radius: 6px; background: #fbf1ed; color: #aa4f34; font-size: 11px; white-space: nowrap; }
+.clear-queue-button:hover { background: #f4e3da; }
+.clear-queue-button:disabled { opacity: .45; cursor: default; }
+.clear-queue-button:focus-visible { outline: 2px solid #aa4f34; outline-offset: 3px; }
+.clear-queue-status { margin: 8px 0 0; font-size: 11px; color: #777; line-height: 1.6; }
+.clear-queue-status:empty { display: none; }
 a { color: inherit; }
 
 .app-shell {

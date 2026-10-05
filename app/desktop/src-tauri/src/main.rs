@@ -152,6 +152,15 @@ fn bind_slot(
 
 #[cfg(any(target_os = "macos", windows))]
 #[tauri::command]
+fn clear_summary_queue(slot: u8, expected_generation: u64) -> Result<DashboardSnapshot, &'static str> {
+    let paths = app_paths().ok_or("home_unavailable")?;
+    easy_codex_host::health::clear_dashboard_summary_queue(
+        &paths.runtime_directory.join(HEALTH_SOCKET_NAME), slot, expected_generation)
+        .map_err(|_| "clear_queue_failed")
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
 fn open_codex_task(task_id: String) -> Result<(), &'static str> {
     let task_id = uuid::Uuid::parse_str(&task_id).map_err(|_| "invalid_task_id")?;
     let url = format!("codex://threads/{task_id}");
@@ -254,6 +263,7 @@ fn main() {
             host_health,
             host_dashboard,
             bind_slot,
+            clear_summary_queue,
             open_codex_task
         ])
         .run(tauri::generate_context!())

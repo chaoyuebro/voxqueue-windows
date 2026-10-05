@@ -47,6 +47,29 @@ let dashboard = null;
 const dirtySlots = new Set();
 let selectedSlot = 1;
 let selectedKey = 1;
+const clearingSlots = new Set();
+
+/** @param {number} slot @param {HTMLElement} row */
+async function clearQueue(slot, row) {
+  const current = slotSnapshot(slot);
+  if (!current?.binding_generation || clearingSlots.has(slot)) return;
+  const button = /** @type {HTMLButtonElement} */ (childElement(row, ".clear-queue-button"));
+  const status = childElement(row, ".clear-queue-status");
+  clearingSlots.add(slot);
+  button.disabled = true;
+  status.textContent = "正在清除…";
+  try {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (!invoke) throw new Error("tauri_unavailable");
+    renderDashboard(await invoke("clear_summary_queue", { slot, expectedGeneration: current.binding_generation }));
+    status.textContent = "待听已清除";
+  } catch {
+    status.textContent = "清除失败，请刷新后重试";
+  } finally {
+    clearingSlots.delete(slot);
+    button.disabled = !slotSnapshot(slot)?.task_id;
+  }
+}
 
 /** @param {number} slot @param {number} [key] */
 function selectSlot(slot, key = slot) {
@@ -172,9 +195,14 @@ function renderDashboard(snapshot) {
       });
       button.addEventListener("click", () => void bindSlot(slot.slot, newRow));
       openButton.addEventListener("click", () => void openTask(newRow));
+      childElement(newRow, ".clear-queue-button").addEventListener("click", () => void clearQueue(slot.slot, newRow));
       elements.slots.append(newRow);
     }
     row.classList.toggle("selected", slot.slot === selectedSlot);
+    const clearButton = /** @type {HTMLButtonElement} */ (childElement(row, ".clear-queue-button"));
+    clearButton.disabled = !slot.task_id || clearingSlots.has(slot.slot);
+    clearButton.ariaLabel = `清除槽位 ${slot.slot} 的待听队列`;
+    clearButton.title = "将这个槽位当前的待听总结标记为已读";
     const select = /** @type {HTMLSelectElement} */ (
       childElement(row, ".task-select")
     );
@@ -285,6 +313,10 @@ async function refreshDashboard() {
     return;
   }
   const unavailable = presentDashboardFailure(probe.connection);
+  dashboard = null;
+  for (const button of Array.from(elements.slots.querySelectorAll(".clear-queue-button"))) {
+    if (button instanceof HTMLButtonElement) button.disabled = true;
+  }
   elements.taskCount.textContent = unavailable.taskCount;
   elements.providerDot.className = "provider-dot offline";
   elements.providerState.textContent = unavailable.providerState;

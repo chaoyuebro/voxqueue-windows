@@ -1206,6 +1206,82 @@ impl StateStore {
         query_current_unread(&self.connection, task_id)
     }
 
+    /// Mark one slot's collected summaries as read, without cancelling Codex jobs.
+    /// Invalidate active claims and playback leases so late workers cannot resurrect old unread state.
+    pub fn clear_slot_summary_queue(
+        &mut self,
+        slot: u8,
+        expected_generation: u64,
+    ) -> Result<(), StoreError> {
+        validate_slot(slot)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let binding: Option<(String, i64)> = transaction
+            .query_row(
+                "SELECT task_id,generation FROM bindings WHERE slot=?1",
+                [slot],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let task_id = match binding {
+            Some((task_id, generation))
+                if expected_generation > 0 && generation as u64 == expected_generation =>
+            {
+                task_id
+            }
+            _ => return Err(StoreError::BindingChanged),
+        };
+        transaction.execute(
+            "DELETE FROM summary_playback_leases WHERE task_id=?1",
+            [&task_id],
+        )?;
+        transaction.execute(
+            "UPDATE summary_ledger SET state='heard',updated_at=unixepoch()
+                WHERE task_id=?1 AND state IN ('unheard','leased')",
+            [&task_id],
+        )?;
+        transaction.execute(
+            "UPDATE summary_ledger SET state='abandoned',claim_id=NULL,updated_at=unixepoch()
+                WHERE task_id=?1 AND state IN ('generating','interrupted')",
+            [&task_id],
+        )?;
+        let (pending, covers): (i64, String) = transaction.query_row(
+            "SELECT COUNT(*),json_group_array(completion_id) FROM completion_ledger
+                 WHERE task_id=?1 AND summarized_generation IS NULL",
+            [&task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if pending > 0 {
+            let previous: i64 = transaction.query_row(
+                "SELECT COALESCE(MAX(generation),0) FROM summary_ledger WHERE task_id=?1",
+                [&task_id],
+                |row| row.get(0),
+            )?;
+            let generation = previous
+                .checked_add(1)
+                .ok_or(StoreError::SummaryGenerationOutOfRange)?;
+            transaction.execute(
+                "INSERT INTO summary_ledger
+                    (task_id,generation,state,covers_completions,request_id,created_at,updated_at)
+                    VALUES (?1,?2,'heard',?3,?4,unixepoch(),unixepoch())",
+                params![
+                    task_id,
+                    generation,
+                    covers,
+                    format!("dismiss-{}", uuid::Uuid::new_v4())
+                ],
+            )?;
+            transaction.execute(
+                "UPDATE completion_ledger SET summarized_generation=?2
+                    WHERE task_id=?1 AND summarized_generation IS NULL",
+                params![task_id, generation],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn mailbox_status(&self) -> Result<MailboxStatusSnapshot, StoreError> {
         let mut status = MailboxStatusSnapshot::default();
         for binding in self.bindings()? {

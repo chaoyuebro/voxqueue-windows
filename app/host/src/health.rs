@@ -132,6 +132,11 @@ enum HostRequest {
     Dashboard {
         v: u8,
     },
+    ClearSummaryQueue {
+        v: u8,
+        slot: u8,
+        expected_generation: u64,
+    },
     BindSlot {
         v: u8,
         slot: u8,
@@ -213,6 +218,11 @@ pub struct DashboardSnapshot {
 }
 
 enum ControlRequest {
+    ClearSummaryQueue {
+        slot: u8,
+        expected_generation: u64,
+        reply: mpsc::SyncSender<Result<DashboardSnapshot, &'static str>>,
+    },
     Dashboard {
         reply: mpsc::SyncSender<Result<DashboardSnapshot, &'static str>>,
     },
@@ -732,6 +742,15 @@ fn process_control_request(
     #[cfg(all(any(target_os = "macos", windows), not(test)))] paths: &AppPaths,
 ) {
     match request {
+        ControlRequest::ClearSummaryQueue { slot, expected_generation, reply } => {
+            let result = store.clear_slot_summary_queue(slot, expected_generation).map_err(|error| match error {
+                StoreError::BindingChanged => "stale_binding", _ => "state_failed",
+            })
+                .and_then(|_| build_dashboard(store, catalog, lan,
+                    #[cfg(all(any(target_os = "macos", windows), not(test)))]
+                    paths));
+            let _ = reply.send(result);
+        }
         ControlRequest::Dashboard { reply } => {
             let _ = reply.send(build_dashboard(
                 store,
@@ -908,6 +927,8 @@ fn handle_client(
             |reply| ControlRequest::Dashboard { reply },
             deadline,
         ),
+        Ok(HostRequest::ClearSummaryQueue { v: HEALTH_PROTOCOL_VERSION, slot, expected_generation }) => forward_control(
+            &mut stream, control, |reply| ControlRequest::ClearSummaryQueue { slot, expected_generation, reply }, deadline),
         Ok(HostRequest::BindSlot {
             v: HEALTH_PROTOCOL_VERSION,
             slot,
@@ -1024,6 +1045,13 @@ pub fn bind_dashboard_slot(
     Ok(dashboard)
 }
 
+pub fn clear_dashboard_summary_queue(socket_path: &Path, slot: u8, expected_generation: u64) -> Result<DashboardSnapshot, HealthError> {
+    if !(1..=4).contains(&slot) || expected_generation == 0 { return Err(HealthError::InvalidResponse); }
+    let dashboard = query_host(socket_path, &HostRequest::ClearSummaryQueue { v: HEALTH_PROTOCOL_VERSION, slot, expected_generation })?;
+    validate_dashboard(&dashboard)?;
+    Ok(dashboard)
+}
+
 fn query_host<T: DeserializeOwned>(
     socket_path: &Path,
     request: &HostRequest,
@@ -1082,7 +1110,7 @@ struct ErrorReplyOwned {
 fn validate_dashboard(dashboard: &DashboardSnapshot) -> Result<(), HealthError> {
     if dashboard.v != HEALTH_PROTOCOL_VERSION
         || dashboard.tasks.len()
-            > crate::codex_catalog::MAX_PINNED_TASKS + crate::codex_catalog::MAX_RECENT_TASKS
+            > crate::codex_catalog::MAX_PINNED_TASKS + crate::codex_catalog::MAX_RECENT_TASKS + 4
         || dashboard.slots.len() != 4
         || dashboard.provider.region != PROVIDER_REGION
         || dashboard.provider.asr_model != ASR_MODEL

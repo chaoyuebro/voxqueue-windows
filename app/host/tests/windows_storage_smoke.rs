@@ -9,8 +9,147 @@ use easy_codex_host::paths::{AppPaths, open_private_file, replace_private_file};
 use easy_codex_host::rollout_observer::RolloutObserver;
 use easy_codex_host::secrets::{ImportLock, KeychainAccounts, LocalCacheSecretStore};
 use easy_codex_host::store::{NewJob, StateStore};
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use serde_json::json;
+
+#[test]
+fn per_slot_clear_preserves_other_queues_fences_workers_and_preserves_new_work() {
+    use easy_codex_host::store::SummaryClaimResult;
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    let mut store = StateStore::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    let tasks = (0..5)
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect::<Vec<_>>();
+    let insert = |task: &str| {
+        let id = uuid::Uuid::new_v4().to_string();
+        connection
+            .execute(
+                "INSERT INTO completion_ledger
+            (completion_id,task_id,rollout_cursor,observed_at,turn_pack)
+            VALUES (?1,?2,'fixture',unixepoch(),'{\"turn\":1}')",
+                params![id, task],
+            )
+            .unwrap();
+        id
+    };
+    for (index, task) in tasks.iter().enumerate() {
+        insert(task);
+        if index < 4 {
+            store.set_binding(index as u8 + 1, None, task).unwrap();
+        }
+    }
+    let Some(SummaryClaimResult::Claimed(active)) =
+        store.claim_summary(&tasks[0], "active").unwrap()
+    else {
+        panic!()
+    };
+    for index in 2..4 {
+        let Some(SummaryClaimResult::Claimed(claim)) = store
+            .claim_summary(&tasks[index], &format!("published-{index}"))
+            .unwrap()
+        else {
+            panic!()
+        };
+        store
+            .publish_summary(
+                &claim,
+                &CacheId::for_task(&tasks[index], 1).unwrap().reference(),
+            )
+            .unwrap();
+    }
+    let lease = store.acquire_summary_playback(3, 1, 1, 1).unwrap().unwrap();
+    store
+        .enqueue(&NewJob {
+            request_id: "queued-job",
+            task_id: &tasks[0],
+            slot: 1,
+            generation: 1,
+            prompt: "keep this task",
+            cwd: temporary.path(),
+        })
+        .unwrap();
+    assert!(store.clear_slot_summary_queue(1, 2).is_err());
+    assert_eq!(
+        store.pending_summary_completion_count(&tasks[0]).unwrap(),
+        1
+    );
+    store.clear_slot_summary_queue(1, 1).unwrap();
+    assert_eq!(
+        store.pending_summary_completion_count(&tasks[1]).unwrap(),
+        1
+    );
+    assert!(store.current_unread_summary(&tasks[2]).unwrap().is_some());
+    assert!(store.current_unread_summary(&tasks[3]).unwrap().is_some());
+    for slot in 2..=4 {
+        store.clear_slot_summary_queue(slot, 1).unwrap();
+    }
+    for task in &tasks[..4] {
+        assert!(store.current_unread_summary(task).unwrap().is_none());
+        assert_eq!(store.pending_summary_completion_count(task).unwrap(), 0);
+        assert!(
+            store
+                .claim_summary(task, &format!("after-clear-{task}"))
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(store.mailbox_status().unwrap().unread_slots, 0);
+    assert_eq!(
+        store.pending_summary_completion_count(&tasks[4]).unwrap(),
+        1
+    );
+    assert_eq!(store.pending_count(&tasks[0]).unwrap(), 1);
+    assert!(
+        store
+            .publish_summary(
+                &active,
+                &CacheId::for_task(&tasks[0], 1).unwrap().reference()
+            )
+            .is_err()
+    );
+    assert!(!store.cancel_summary_playback(&lease).unwrap());
+    assert!(!store.finish_summary_playback(&lease).unwrap());
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM summary_ledger", [], |r| r.get(0))
+        .unwrap();
+    for slot in 1..=4 {
+        store.clear_slot_summary_queue(slot, 1).unwrap();
+    }
+    assert_eq!(
+        connection
+            .query_row::<i64, _, _>("SELECT COUNT(*) FROM summary_ledger", [], |r| r.get(0))
+            .unwrap(),
+        count
+    );
+    drop(store);
+    let mut store = StateStore::open(&path).unwrap();
+    assert_eq!(store.mailbox_status().unwrap().unread_slots, 0);
+    assert!(
+        store
+            .resume_interrupted_summary(&tasks[0])
+            .unwrap()
+            .is_none()
+    );
+    let new_id = insert(&tasks[0]);
+    let Some(SummaryClaimResult::Claimed(fresh)) = store.claim_summary(&tasks[0], "fresh").unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(fresh.completions.len(), 1);
+    assert_eq!(fresh.completions[0].completion_id, new_id);
+    assert!(fresh.previous_unread.is_none());
+    store
+        .publish_summary(
+            &fresh,
+            &CacheId::for_task(&tasks[0], fresh.generation)
+                .unwrap()
+                .reference(),
+        )
+        .unwrap();
+    assert_eq!(store.mailbox_status().unwrap().unread_slots, 1);
+}
 
 #[test]
 fn interrupted_summary_recovers_after_previous_audio_was_heard() {
