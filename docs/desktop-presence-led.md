@@ -23,7 +23,9 @@ EIMB 从 v3 升级为 v4，长度仍为 32 bytes，byte 7 为 desktop_running（
 - 真实 Windows 进程检查：检测到当前打开的桌面程序（1 项通过）。
 - C++ mailbox_led_tests、codex_playback_wire_tests：2 项通过，覆盖关闭时最右侧黑色、其他槽灯不变、v3 兼容、v4 开关及非法标记拒绝。
 - Windows NSIS 安装包已构建；固件在 ASCII 路径构建，避开 Xtensa objdump 对中文路径的限制。
-- 当前尚未烧录实体键盘，也未替换已安装 Host。实体开关软件验收待升级后进行。
+- 2026-10-05 经用户确认后，已在 COM7 对 EasyInput V2 执行 application-only 烧录，写入 0x10000，esptool 输出 Hash of data verified 并自动重启。
+- 已更新本机 Host 和桌面程序，安装文件与构建文件 SHA-256 完全相同。Host ready（schema 7）；重启后 16 个认证心跳、16 次信箱状态发送成功，无发送失败。四槽绑定及 generation 保持原值。
+- 软件启动/退出对应灯的实体视觉验收仍待用户确认；未主动退出当前正在使用的 ChatGPT。
 
 ## 本机构建
 
@@ -41,3 +43,10 @@ ESP-IDF v5.5.5 位于 D:/v5.5.5/esp-idf，工具位于 D:/Espressif。
 本机已有对应分区布局，只需应用更新：确认上述应用固件 SHA 后，以已确认的键盘 USB serial 运行
 `scripts/flash-windows-v2.py --serial <serial> --application-only`。该方式只写 0x10000 的应用镜像，保留 bootloader、分区表、NVS 和声音资源。
 烧录成功后再更新 Host，最后验收：启动桌面软件→亮，真正退出→2–4 秒后灭，再启动→恢复。
+
+## 本机更新记录
+
+- Host SHA-256：`298ff0ebbdd19f94c56b2e4a112dfe16b83491ede27bfc2443a8101e72f55a35`。
+- 桌面程序 SHA-256：`665b0ff782a181cc465110216fbcc8f2d45a93331c16bf04234832739a91be74`。
+- 备份：安装目录内 `backup-before-presence-led-20261005-234151`，含此前两份 exe 及 SQLite 在线备份。
+- Host 日志：数据目录 `run/presence-host-stdout.log`、`run/presence-host-stderr.log`。
