@@ -204,6 +204,8 @@ pub struct ProviderSnapshot {
 #[serde(deny_unknown_fields)]
 pub struct DashboardSnapshot {
     pub v: u8,
+    #[serde(default)]
+    pub prompt_backend: String,
     pub tasks: Vec<DashboardTask>,
     pub slots: Vec<DashboardSlot>,
     pub provider: ProviderSnapshot,
@@ -283,7 +285,12 @@ impl HostDaemon {
             #[cfg(windows)]
             auth_token: Arc::new(auth_token),
             snapshot,
-            scheduler: DurablePromptScheduler::new(CodexRunner::new(CodexRunnerConfig::default())),
+            scheduler: DurablePromptScheduler::new({
+                let runner = CodexRunner::new(CodexRunnerConfig::default());
+                #[cfg(windows)]
+                let runner = runner.with_desktop(paths.runtime_directory.join("desktop-delivery.sqlite3"));
+                runner
+            }),
             catalog,
             lan_voice,
             observer: Some(observer),
@@ -764,12 +771,19 @@ fn build_dashboard(
     lan: LanVoiceDiagnosticsSnapshot,
     #[cfg(all(any(target_os = "macos", windows), not(test)))] paths: &AppPaths,
 ) -> Result<DashboardSnapshot, &'static str> {
-    let tasks = catalog.list_tasks().map_err(|_| "catalog_failed")?;
+    let mut tasks = catalog.list_tasks().map_err(|_| "catalog_failed")?;
+    let bindings = store.bindings().map_err(|_| "state_failed")?;
+    for binding in &bindings {
+        if !tasks.iter().any(|task| task.task_id == binding.task_id) {
+            if let Ok(task) = catalog.bound_task(&binding.task_id) {
+                tasks.push(task);
+            }
+        }
+    }
     let task_lookup = tasks
         .iter()
         .map(|task| (task.task_id.as_str(), task))
         .collect::<BTreeMap<_, _>>();
-    let bindings = store.bindings().map_err(|_| "state_failed")?;
     let binding_lookup = bindings
         .iter()
         .map(|binding| (binding.slot, binding))
@@ -820,6 +834,7 @@ fn build_dashboard(
         .collect();
     Ok(DashboardSnapshot {
         v: HEALTH_PROTOCOL_VERSION,
+        prompt_backend: if cfg!(windows) { "desktop" } else { "cli" }.to_owned(),
         tasks,
         slots,
         lan,

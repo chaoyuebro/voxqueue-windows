@@ -3,6 +3,8 @@ pub mod bindings;
 pub mod cache;
 pub mod codex_catalog;
 pub mod codex_runner;
+#[cfg(windows)]
+pub mod desktop_runner;
 pub mod dashscope;
 pub mod health;
 pub mod lan_playback;

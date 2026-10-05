@@ -49,4 +49,18 @@ fn windows_verbatim_rollout_path_remains_in_catalog() {
     let catalog = CodexTaskCatalog::from_paths(home.to_path_buf(), home.join("snapshots"));
     let task = catalog.allowlisted(id).unwrap();
     assert_eq!(task.rollout_path, rollout);
+
+    // Bound tasks must survive recency eviction while new bindings remain list-gated.
+    let connection = Connection::open(home.join("state_5.sqlite")).unwrap();
+    for index in 2..=12 {
+        let newer = format!("00000000-0000-4000-8000-{index:012}");
+        let newer_rollout = sessions.join(format!("{newer}.jsonl"));
+        fs::write(&newer_rollout, b"").unwrap();
+        connection.execute("INSERT INTO threads VALUES (?1, 'Newer', '', ?2, ?3, 2, 2000, 2000, 0, 'exec', 'user', NULL)",
+            params![newer, home.to_string_lossy(), newer_rollout.to_string_lossy()]).unwrap();
+    }
+    assert!(catalog.allowlisted(id).is_err());
+    assert_eq!(catalog.bound_task(id).unwrap().task_id, id);
+    connection.execute("UPDATE threads SET archived=1 WHERE id=?1", [id]).unwrap();
+    assert!(catalog.bound_task(id).is_err());
 }

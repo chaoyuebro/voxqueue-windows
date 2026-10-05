@@ -410,9 +410,16 @@ impl RolloutObserver {
             if !seen.insert(binding.task_id.clone()) {
                 continue;
             }
-            let Some(task) = tasks.iter().find(|task| task.task_id == binding.task_id) else {
-                tick.failed_tasks += 1;
-                continue;
+            let bound;
+            let task = match tasks.iter().find(|task| task.task_id == binding.task_id) {
+                Some(task) => task,
+                None => {
+                    bound = match self.catalog.bound_task(&binding.task_id) {
+                        Ok(task) => task,
+                        Err(_) => { tick.failed_tasks += 1; continue; }
+                    };
+                    &bound
+                }
             };
             match self.poll_task_with(store, task, Some(&binding)) {
                 Ok(completions) => {

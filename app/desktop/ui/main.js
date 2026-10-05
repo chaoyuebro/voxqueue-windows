@@ -211,8 +211,9 @@ function renderDashboard(snapshot) {
     ).disabled = !selected;
     const selectedTask = tasks.find((task) => task.task_id === selected);
     const status = presentSlotStatus(slot);
-    childElement(row, ".slot-meta").textContent =
-      selectedTask && !selectedTask.cli_created
+    childElement(row, ".slot-meta").textContent = snapshot.prompt_backend === "desktop"
+      ? `${status} · 语音发送到 Codex 桌面，运行期间请等待`
+      : selectedTask && !selectedTask.cli_created
         ? `${status} · 桌面任务请在 Codex 中继续`
         : status;
   }

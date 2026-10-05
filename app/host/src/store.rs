@@ -110,6 +110,8 @@ pub struct Job {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobFailureKind {
     CliMissing,
+    DesktopUnavailable,
+    DeliveryUncertain,
     Authentication,
     TaskArchived,
     ActiveSession,
@@ -125,6 +127,8 @@ impl JobFailureKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CliMissing => "cli_missing",
+            Self::DesktopUnavailable => "desktop_unavailable",
+            Self::DeliveryUncertain => "delivery_uncertain",
             Self::Authentication => "authentication",
             Self::TaskArchived => "task_archived",
             Self::ActiveSession => "active_session",

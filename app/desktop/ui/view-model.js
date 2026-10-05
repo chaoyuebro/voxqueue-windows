@@ -51,6 +51,7 @@
  *
  * @typedef {{
  *   v: number,
+ *   prompt_backend?: string,
  *   tasks: DashboardTask[],
  *   slots: DashboardSlot[],
  *   lan: {
@@ -144,7 +145,12 @@ export function presentSlotStatus(slot) {
           hour12: false,
         }).format(new Date(updatedAt * 1000))
       : null;
-    facts.push(`上次失败${when ? `（${when}）` : ""}${slot.latest_job_failure ? `：${slot.latest_job_failure}` : ""}`);
+    const failure = {
+      desktop_unavailable: "请启动 Codex 桌面端",
+      active_session: "请先在 Codex 桌面端打开该对话",
+      delivery_uncertain: "投递结果未确认，已停止重发，请检查桌面对话",
+    }[slot.latest_job_failure ?? ""] ?? slot.latest_job_failure;
+    facts.push(`上次失败${when ? `（${when}）` : ""}${failure ? `：${failure}` : ""}`);
   }
   return facts.length > 0 ? facts.join(" · ") : slot.task_id ? "已绑定" : "未绑定";
 }

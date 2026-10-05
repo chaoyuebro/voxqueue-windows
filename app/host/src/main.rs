@@ -259,6 +259,17 @@ fn print_codex_catalog_status() -> Result<(), Box<dyn std::error::Error>> {
 fn bind_slot(slot: u8, task_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let paths = home_paths()?;
     paths.prepare()?;
+    let socket = paths.runtime_directory.join(easy_codex_host::health::HEALTH_SOCKET_NAME);
+    if easy_codex_host::health::query_health(&socket).is_ok() {
+        let dashboard = easy_codex_host::health::query_dashboard(&socket)?;
+        let expected = dashboard.slots.iter().find(|entry| entry.slot == slot)
+            .ok_or("invalid slot")?.binding_generation;
+        let updated = easy_codex_host::health::bind_dashboard_slot(&socket, slot, task_id, expected)?;
+        let generation = updated.slots.iter().find(|entry| entry.slot == slot)
+            .and_then(|entry| entry.binding_generation).ok_or("binding was not published")?;
+        println!("status=bound\nslot={slot}\ngeneration={generation}");
+        return Ok(());
+    }
     let catalog = CodexTaskCatalog::from_environment()?;
     let service = BindingService::new(&catalog);
     let mut store = StateStore::open(&paths.state_database)?;

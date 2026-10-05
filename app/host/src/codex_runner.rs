@@ -173,11 +173,19 @@ pub(crate) fn discover_codex_executable() -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct CodexRunner {
     config: CodexRunnerConfig,
+    #[cfg(windows)]
+    desktop_journal: Option<PathBuf>,
 }
 
 impl CodexRunner {
     pub fn new(config: CodexRunnerConfig) -> Self {
-        Self { config }
+        Self { config, #[cfg(windows)] desktop_journal: None }
+    }
+
+    #[cfg(windows)]
+    pub fn with_desktop(mut self, journal: PathBuf) -> Self {
+        self.desktop_journal = Some(journal);
+        self
     }
 
     pub fn run(&self, job: &Job) -> Result<(), JobFailureKind> {
@@ -185,6 +193,10 @@ impl CodexRunner {
     }
 
     pub fn run_with_cancel(&self, job: &Job, cancel: &AtomicBool) -> Result<(), JobFailureKind> {
+        #[cfg(windows)]
+        if let Some(journal) = &self.desktop_journal {
+            return crate::desktop_runner::run(job, cancel, self.config.timeout, journal);
+        }
         #[cfg(unix)]
         let cwd = open_owned_directory_chain(&job.cwd, false)
             .map_err(|_| JobFailureKind::UnsafeWorkingDirectory)?;

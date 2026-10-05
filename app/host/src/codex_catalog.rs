@@ -182,6 +182,21 @@ impl CodexTaskCatalog {
             .find(|task| task.task_id == task_id)
             .ok_or(CatalogError::NotAllowlisted)
     }
+
+    /// Revalidate an already-authorized binding even after it leaves the recent eight.
+    /// New bindings still go through `allowlisted`; archived/internal/unsafe threads remain excluded.
+    pub fn bound_task(&self, task_id: &str) -> Result<CodexTask, CatalogError> {
+        if Uuid::parse_str(task_id).is_err() { return Err(CatalogError::NotAllowlisted); }
+        retry_catalog_read(|| {
+            let global = read_global_state(&self.codex_home.join(".codex-global-state.json"))?;
+            let index = read_session_index(&self.codex_home.join("session_index.jsonl"))?;
+            let database = read_database(&self.codex_home.join("state_5.sqlite"),
+                &[task_id.to_owned()], &self.snapshot_root)?;
+            let row = database.pinned.get(task_id).ok_or(CatalogError::NotAllowlisted)?;
+            build_task(task_id, row, index.get(task_id), &project_labels(&global)?, false)
+                .ok_or(CatalogError::NotAllowlisted)
+        })
+    }
 }
 
 fn retry_catalog_read<T>(

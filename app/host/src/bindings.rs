@@ -27,7 +27,11 @@ impl<'a> BindingService<'a> {
         expected_generation: Option<u64>,
         task_id: &str,
     ) -> Result<Option<Binding>, BindingError> {
-        self.catalog.allowlisted(task_id)?;
+        if store.bindings()?.iter().any(|binding| binding.task_id == task_id) {
+            self.catalog.bound_task(task_id)?;
+        } else {
+            self.catalog.allowlisted(task_id)?;
+        }
         Ok(store.set_binding(slot, expected_generation, task_id)?)
     }
 
@@ -39,7 +43,7 @@ impl<'a> BindingService<'a> {
         let Some(binding) = store.binding(slot)? else {
             return Ok(None);
         };
-        let task = self.catalog.allowlisted(&binding.task_id)?;
+        let task = self.catalog.bound_task(&binding.task_id)?;
         Ok(Some((binding, task)))
     }
 }
