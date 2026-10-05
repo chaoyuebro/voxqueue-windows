@@ -480,6 +480,8 @@ const answerVoiceUI = {
   voice: /** @type {HTMLSelectElement} */ (requiredElement("#answer-voice")),
   speed: /** @type {HTMLInputElement} */ (requiredElement("#answer-speed")),
   value: requiredElement("#answer-speed-value"),
+  volume: /** @type {HTMLInputElement} */ (requiredElement("#answer-volume")),
+  volumeValue: requiredElement("#answer-volume-value"),
   save: /** @type {HTMLButtonElement} */ (requiredElement("#answer-voice-save")),
   status: requiredElement("#answer-voice-status"),
 };
@@ -488,13 +490,17 @@ function showAnswerSpeed() {
   answerVoiceUI.value.textContent = `${Number(answerVoiceUI.speed.value).toFixed(2)}×`;
 }
 answerVoiceUI.speed.addEventListener("input", showAnswerSpeed);
+function showAnswerVolume() {
+  answerVoiceUI.volumeValue.textContent = `${answerVoiceUI.volume.value}%`;
+}
+answerVoiceUI.volume.addEventListener("input", showAnswerVolume);
 answerVoiceUI.form.addEventListener("submit", async (event) => {
   event.preventDefault();
   answerVoiceUI.save.disabled = true;
   answerVoiceUI.status.textContent = "正在保存…";
   try {
     await window.__TAURI__.core.invoke("save_answer_voice_settings", {
-      settings: { voice: answerVoiceUI.voice.value, speed: Number(answerVoiceUI.speed.value) },
+      settings: { voice: answerVoiceUI.voice.value, speed: Number(answerVoiceUI.speed.value), volume: Number(answerVoiceUI.volume.value) / 100 },
     });
     savedAnswerVoiceName = answerVoiceUI.voice.selectedOptions[0]?.textContent || "";
     elements.ttsVoice.textContent = savedAnswerVoiceName;
@@ -517,11 +523,14 @@ async function loadAnswerVoiceSettings() {
     }
     answerVoiceUI.voice.value = preferences.settings.voice;
     answerVoiceUI.speed.value = String(preferences.settings.speed);
+    answerVoiceUI.volume.value = String(Math.round((preferences.settings.volume ?? 1) * 100));
+    showAnswerVolume();
     showAnswerSpeed();
     savedAnswerVoiceName = answerVoiceUI.voice.selectedOptions[0]?.textContent || "";
     elements.ttsVoice.textContent = savedAnswerVoiceName;
     answerVoiceUI.voice.disabled = false;
     answerVoiceUI.speed.disabled = false;
+    answerVoiceUI.volume.disabled = false;
     answerVoiceUI.save.disabled = false;
     answerVoiceUI.status.textContent = "设置重启后保留";
   } catch (error) {

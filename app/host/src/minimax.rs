@@ -101,7 +101,8 @@ impl VoiceClient {
             _ => VoiceError::AmbiguousAfterCommit,
         })?;
         let (source, characters) = parse_tts(&body)?;
-        let pcm = resample_pcm16_mono(&source)?;
+        let mut pcm = resample_pcm16_mono(&source)?;
+        apply_volume(&mut pcm, settings.volume)?;
         let samples = (pcm.len() / 2) as u64;
         Ok(TtsAudio::from_provider(
             pcm,
@@ -126,6 +127,19 @@ pub fn synthesis_request(text: &str, settings: &crate::voice_settings::VoiceSett
         "voice_setting": {"voice_id": settings.voice, "speed": settings.speed, "vol": 1.0, "pitch": 0},
         "audio_setting": {"sample_rate": TTS_SOURCE_RATE, "format": "pcm", "channel": 1}
     }))
+}
+
+/// Scale PCM locally so 0% is exact silence and the original 100% level stays unchanged.
+#[doc(hidden)]
+pub fn apply_volume(pcm: &mut [u8], volume: f64) -> Result<(), VoiceError> {
+    if !volume.is_finite() || !(0.0..=1.0).contains(&volume) || pcm.len() % 2 != 0 {
+        return Err(VoiceError::InvalidRequest);
+    }
+    for bytes in pcm.chunks_exact_mut(2) {
+        let sample = i16::from_le_bytes([bytes[0], bytes[1]]);
+        bytes.copy_from_slice(&((f64::from(sample) * volume).round() as i16).to_le_bytes());
+    }
+    Ok(())
 }
 
 fn bearer(key: &[u8]) -> Result<String, VoiceError> {

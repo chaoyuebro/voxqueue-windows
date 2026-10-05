@@ -7,7 +7,11 @@ use serde::{Deserialize, Serialize};
 pub struct VoiceSettings {
     pub voice: String,
     pub speed: f64,
+    #[serde(default = "default_volume")]
+    pub volume: f64,
 }
+
+fn default_volume() -> f64 { 1.0 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VoiceOption {
@@ -30,15 +34,16 @@ pub fn voices() -> Vec<VoiceOption> {
 
 impl Default for VoiceSettings {
     fn default() -> Self {
-        Self { voice: crate::minimax::TTS_VOICE.into(), speed: 1.0 }
+        Self { voice: crate::minimax::TTS_VOICE.into(), speed: 1.0, volume: 1.0 }
     }
 }
 
 impl VoiceSettings {
     pub fn validate(&self) -> io::Result<()> {
         if !voices().iter().any(|v| v.id == self.voice)
-            || !self.speed.is_finite() || !(0.5..=2.0).contains(&self.speed) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "音色或语速无效"));
+            || !self.speed.is_finite() || !(0.5..=2.0).contains(&self.speed)
+            || !self.volume.is_finite() || !(0.0..=1.0).contains(&self.volume) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "音色、语速或音量无效"));
         }
         Ok(())
     }
