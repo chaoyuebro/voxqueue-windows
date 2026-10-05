@@ -2046,7 +2046,7 @@ fn read_bounded_line(
     }
 }
 
-pub(crate) fn redact_sensitive_text(text: &str) -> String {
+pub fn redact_sensitive_text(text: &str) -> String {
     let sanitized = Zeroizing::new(text.replace('\0', ""));
     let mut private_key = false;
     let mut joined = Zeroizing::new(String::with_capacity(sanitized.len().min(MAX_TEXT_BYTES)));

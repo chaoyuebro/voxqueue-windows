@@ -1,5 +1,7 @@
 //! Windows desktop IPC adapter. Acknowledgement is never treated as completion.
 //! The journal is committed before writing a prompt; ambiguous delivery is never replayed.
+use std::collections::VecDeque;
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
@@ -15,11 +17,14 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::codex_catalog::{CatalogError, CodexTaskCatalog};
+#[cfg(test)]
 use crate::rollout_observer::LifecycleRecordParser;
+use crate::desktop_notifications::Subscription;
 use crate::store::{Job, JobFailureKind};
 
 type Result<T> = std::result::Result<T, JobFailureKind>;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
+#[cfg(test)]
 const MAX_SCAN_PER_POLL: usize = 4 * 1024 * 1024;
 
 #[link(name = "Kernel32")]
@@ -34,14 +39,15 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-struct Ipc {
+pub(crate) struct Ipc {
     pipe: File,
     buffer: Vec<u8>,
     client: String,
+    events: VecDeque<Value>,
 }
 
 impl Ipc {
-    fn connect(cancel: &AtomicBool, deadline: Instant) -> Result<Self> {
+    pub(crate) fn connect(cancel: &AtomicBool, deadline: Instant) -> Result<Self> {
         let pipe = OpenOptions::new()
             .read(true)
             .write(true)
@@ -51,6 +57,7 @@ impl Ipc {
             pipe,
             buffer: Vec::new(),
             client: "initializing-client".into(),
+            events: VecDeque::new(),
         };
         let reply = ipc.request(
             "initialize",
@@ -68,7 +75,7 @@ impl Ipc {
         Ok(ipc)
     }
 
-    fn send(&mut self, value: &Value) -> Result<()> {
+    pub(crate) fn send(&mut self, value: &Value) -> Result<()> {
         let bytes = serde_json::to_vec(value).map_err(|_| JobFailureKind::InvalidOutput)?;
         if bytes.len() > MAX_FRAME {
             return Err(JobFailureKind::OutputTooLarge);
@@ -77,6 +84,24 @@ impl Ipc {
             .write_all(&(bytes.len() as u32).to_le_bytes())
             .and_then(|_| self.pipe.write_all(&bytes))
             .map_err(|_| JobFailureKind::ProcessIo)
+    }
+
+    pub(crate) fn follow(&mut self, task: &str, owner: &str, following: bool) -> Result<()> {
+        self.send(&json!({"type":"broadcast","sourceClientId":self.client,
+            "method":"thread-stream-following-changed","version":1,
+            "targetClientIds":[owner],"params":{"hostId":"local",
+            "conversationId":task,"following":following}}))
+    }
+
+    pub(crate) fn event(&mut self, cancel: &AtomicBool, deadline: Instant) -> Result<Value> {
+        if let Some(value) = self.events.pop_front() { return Ok(value); }
+        loop {
+            let value = self.receive(cancel, deadline)?;
+            if value["type"] == "client-discovery-request" {
+                self.send(&json!({"type":"client-discovery-response",
+                    "requestId":value["requestId"],"response":{"canHandle":false}}))?;
+            } else { return Ok(value); }
+        }
     }
 
     fn receive(&mut self, cancel: &AtomicBool, deadline: Instant) -> Result<Value> {
@@ -124,7 +149,7 @@ impl Ipc {
         }
     }
 
-    fn request(
+    pub(crate) fn request(
         &mut self,
         method: &str,
         version: u32,
@@ -144,6 +169,11 @@ impl Ipc {
         let deadline = outer_deadline.min(Instant::now() + Duration::from_secs(32));
         loop {
             let reply = self.receive(cancel, deadline)?;
+            if reply["type"] == "broadcast" {
+                if self.events.len() >= 256 { return Err(JobFailureKind::InvalidOutput); }
+                self.events.push_back(reply);
+                continue;
+            }
             if reply["type"] == "client-discovery-request" {
                 self.send(
                     &json!({"type":"client-discovery-response", "requestId":reply["requestId"],
@@ -171,6 +201,8 @@ fn check(cancel: &AtomicBool, deadline: Instant) -> Result<()> {
 }
 
 /// Incremental JSONL reader. Partial writes stay buffered; only matching lifecycle IDs finish a job.
+// Retained only as a regression fixture for the replaced reader, never in production.
+#[cfg(test)]
 struct Lifecycle {
     file: File,
     path: std::path::PathBuf,
@@ -184,6 +216,7 @@ struct Lifecycle {
     terminal: BTreeMap<String, bool>,
 }
 
+#[cfg(test)]
 impl Lifecycle {
     fn open(path: &Path) -> Result<Self> {
         let file =
@@ -375,10 +408,7 @@ pub fn run(job: &Job, cancel: &AtomicBool, timeout: Duration, journal_path: &Pat
     if prior.is_none() && job.recovery_count > 0 {
         return Err(JobFailureKind::DeliveryUncertain);
     }
-    let mut scan = Lifecycle::open(&task.rollout_path)?;
-    if scan.session_id.as_deref() != Some(&job.task_id) {
-        return Err(JobFailureKind::InvalidOutput);
-    }
+    let mut scan = Subscription::connect(&job.task_id, cancel, deadline)?;
     // Unresolved older deliveries fence this conversation, including jobs marked failed after timeout.
     let mut statement = db
         .prepare(
@@ -412,30 +442,18 @@ pub fn run(job: &Job, cancel: &AtomicBool, timeout: Duration, journal_path: &Pat
         turn
     } else {
         scan.wait_idle(cancel, deadline)?;
-        let mut ipc = Ipc::connect(cancel, deadline)?;
-        let owner = ipc.request(
-            "thread-owner-discovery",
-            1,
-            json!({"hostId":"local","conversationId":job.task_id}),
-            None,
-            cancel,
-            deadline,
-        )?;
-        let target = owner["handledByClientId"]
-            .as_str()
-            .ok_or(JobFailureKind::ActiveSession)?;
-        scan.wait_idle(cancel, deadline)?;
+        let target = scan.state.owner.clone();
         db.execute(
             "INSERT INTO deliveries(request_id,task_id,state) VALUES(?1,?2,'intent')",
             params![job.request_id, job.task_id],
         )
         .map_err(|_| JobFailureKind::ProcessIo)?;
-        let reply = ipc
+        let reply = scan.ipc
             .request(
                 "thread-follower-start-turn",
                 2,
                 start_payload(job),
-                Some(target),
+                Some(&target),
                 cancel,
                 deadline,
             )

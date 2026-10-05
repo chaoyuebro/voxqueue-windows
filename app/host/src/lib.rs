@@ -5,6 +5,8 @@ pub mod codex_catalog;
 pub mod codex_runner;
 #[cfg(windows)]
 pub mod desktop_runner;
+#[cfg(windows)]
+pub mod desktop_notifications;
 pub mod dashscope;
 pub mod health;
 pub mod lan_playback;

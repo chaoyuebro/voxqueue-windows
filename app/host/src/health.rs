@@ -50,7 +50,11 @@ use crate::minimax::TTS_VOICE as SUMMARY_TTS_VOICE;
 use crate::minimax::{ASR_MODEL, TTS_MODEL};
 use crate::paths::{AppPaths, open_owned_directory_chain};
 use crate::prompt_queue::{DurablePromptScheduler, PromptQueueService};
-use crate::rollout_observer::{ObserverError, RolloutObserver};
+use crate::rollout_observer::ObserverError;
+#[cfg(any(not(windows), test))]
+use crate::rollout_observer::RolloutObserver;
+#[cfg(all(windows, not(test)))]
+use crate::desktop_notifications::DesktopObserver as RolloutObserver;
 #[cfg(all(target_os = "macos", not(test)))]
 use crate::secrets::DashScopeEnvStore;
 #[cfg(all(target_os = "macos", not(test)))]
@@ -256,7 +260,10 @@ impl HostDaemon {
         let store = StateStore::open(&paths.state_database)?;
         let database_schema = store.schema_version()?;
         let recovered_jobs_on_start = store.recovered_jobs_on_open();
+        #[cfg(any(not(windows), test))]
         let observer = RolloutObserver::from_environment()?;
+        #[cfg(all(windows, not(test)))]
+        let observer = RolloutObserver::new();
         let catalog = CodexTaskCatalog::from_environment()?;
         let lan_voice_config = LanVoiceConfig::from_paths(paths);
         #[cfg(test)]

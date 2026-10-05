@@ -17,7 +17,7 @@ use thiserror::Error;
 use crate::cache::CacheId;
 use crate::paths::{ExplicitFileLock, open_private_file};
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 pub const MAX_PENDING_JOBS_PER_TASK: u32 = 12;
 pub const MAX_GLOBAL_RUNNING_JOBS: u32 = 4;
 pub const MAX_SUMMARY_COMPLETIONS_PER_CLAIM: usize = 32;
@@ -153,6 +153,13 @@ pub struct Binding {
     pub slot: u8,
     pub task_id: String,
     pub generation: u64,
+}
+
+pub struct DesktopTurnObservation {
+    pub turn_id: String,
+    pub status: String,
+    pub started_at_ms: u64,
+    pub turn_pack: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1581,6 +1588,52 @@ impl StateStore {
 }
 
 impl ObserverStateStore {
+    /// Durable notification baseline, deduplication, and completion publication.
+    /// Initial historical answers do not create a new unheard queue. Reconnecting
+    /// recovers turns seen running and new turns above the initial time watermark.
+    pub fn observe_desktop_snapshot(&mut self, binding: &Binding, turns: &[DesktopTurnObservation]) -> Result<usize, StoreError> {
+        ensure_file_identity(&self._database_guard, &self.path)?;
+        for turn in turns {
+            if uuid::Uuid::parse_str(&turn.turn_id).is_err()
+                || turn.turn_pack.as_ref().is_some_and(|pack|pack.is_empty() || pack.len() > MAX_TURN_PACK_BYTES) {
+                return Err(StoreError::InvalidCompletion);
+            }
+        }
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let bound: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM bindings WHERE slot=?1 AND task_id=?2 AND generation=?3)",
+            params![binding.slot,binding.task_id,to_i64(binding.generation)?],|r|r.get(0))?;
+        if !bound { return Err(StoreError::BindingChanged); }
+        let baseline: Option<i64> = tx.query_row("SELECT baseline_started_at FROM desktop_notification_tasks WHERE task_id=?1",
+            [&binding.task_id],|r|r.get(0)).optional()?;
+        if baseline.is_none() {
+            tx.execute("INSERT INTO desktop_notification_tasks(task_id,baseline_started_at) VALUES(?1,?2)",
+                params![binding.task_id,to_i64(turns.iter().map(|t|t.started_at_ms).max().unwrap_or(0))?])?;
+        }
+        let mut inserted = 0;
+        for turn in turns {
+            let prior: Option<String> = tx.query_row("SELECT status FROM desktop_notification_turns WHERE task_id=?1 AND turn_id=?2",
+                params![binding.task_id,turn.turn_id],|r|r.get(0)).optional()?;
+            let is_new = prior.as_deref() == Some("inProgress") ||
+                (prior.is_none() && baseline.is_some_and(|base|turn.started_at_ms > base as u64));
+            if is_new && turn.status == "completed" && let Some(pack) = &turn.turn_pack {
+                let existing: Option<String> = tx.query_row("SELECT task_id FROM completion_ledger WHERE completion_id=?1",
+                    [&turn.turn_id],|r|r.get(0)).optional()?;
+                if existing.as_ref().is_some_and(|task|task != &binding.task_id) { return Err(StoreError::CompletionConflict); }
+                inserted += tx.execute("INSERT OR IGNORE INTO completion_ledger(completion_id,task_id,rollout_cursor,observed_at,turn_pack)
+                    VALUES(?1,?2,'desktop-notification',unixepoch(),?3)",params![turn.turn_id,binding.task_id,pack])?;
+            }
+            let saved_status = if is_new && turn.status == "completed" && turn.turn_pack.is_none() {
+                "inProgress"
+            } else { &turn.status };
+            tx.execute("INSERT INTO desktop_notification_turns(task_id,turn_id,status) VALUES(?1,?2,?3)
+                ON CONFLICT(task_id,turn_id) DO UPDATE SET status=excluded.status",
+                params![binding.task_id,turn.turn_id,saved_status])?;
+        }
+        tx.commit()?;
+        ensure_file_identity(&self._database_guard, &self.path)?;
+        Ok(inserted)
+    }
+
     pub fn bindings(&self) -> Result<Vec<Binding>, StoreError> {
         ensure_file_identity(&self._database_guard, &self.path)?;
         query_bindings(&self.connection)
@@ -2101,6 +2154,12 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         create_summary_tts_attempts(&transaction)?;
     }
     create_summary_playback_leases(&transaction)?;
+    transaction.execute_batch("CREATE TABLE IF NOT EXISTS desktop_notification_tasks (
+        task_id TEXT PRIMARY KEY, baseline_started_at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS desktop_notification_turns (
+        task_id TEXT NOT NULL, turn_id TEXT NOT NULL, status TEXT NOT NULL,
+        PRIMARY KEY(task_id,turn_id));")?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
 }

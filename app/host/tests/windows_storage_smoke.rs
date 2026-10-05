@@ -13,6 +13,48 @@ use rusqlite::{Connection, params};
 use serde_json::json;
 
 #[test]
+fn notification_baseline_reconnect_and_clear_are_durable_and_deduplicated() {
+    use easy_codex_host::store::{DesktopTurnObservation, StoreError};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state.sqlite3");
+    let mut store = StateStore::open(&path).unwrap();
+    let task = uuid::Uuid::new_v4().to_string();
+    store.set_binding(1,None,&task).unwrap();
+    let binding = store.bindings().unwrap().remove(0);
+    let old = uuid::Uuid::new_v4().to_string();
+    let running = uuid::Uuid::new_v4().to_string();
+    let pack = |id: &str| json!({"v":1,"turn_id":id,"user":["input"],"assistant":["answer"],"tools":[]}).to_string();
+    let observation = |id: &str,status: &str,time: u64| DesktopTurnObservation {
+        turn_id:id.into(),status:status.into(),started_at_ms:time,
+        turn_pack:if status=="completed" {Some(pack(id))} else {None}};
+    let mut observer = store.open_observer_store().unwrap();
+    assert_eq!(observer.observe_desktop_snapshot(&binding,&[
+        observation(&old,"completed",1),observation(&running,"inProgress",2)]).unwrap(),0);
+    drop(observer);
+    let mut observer = store.open_observer_store().unwrap();
+    assert_eq!(observer.observe_desktop_snapshot(&binding,&[observation(&running,"completed",2)]).unwrap(),1);
+    assert_eq!(observer.observe_desktop_snapshot(&binding,&[observation(&running,"completed",2)]).unwrap(),0);
+    assert_eq!(store.pending_summary_completion_count(&task).unwrap(),1);
+    store.clear_slot_summary_queue(1,binding.generation).unwrap();
+    assert_eq!(observer.observe_desktop_snapshot(&binding,&[observation(&running,"completed",2)]).unwrap(),0);
+    assert_eq!(store.pending_summary_completion_count(&task).unwrap(),0);
+    let hydrated_old = uuid::Uuid::new_v4().to_string();
+    assert_eq!(observer.observe_desktop_snapshot(&binding,&[observation(&hydrated_old,"completed",1)]).unwrap(),0);
+    let new = uuid::Uuid::new_v4().to_string();
+    assert_eq!(observer.observe_desktop_snapshot(&binding,&[observation(&new,"completed",3)]).unwrap(),1);
+    let delayed = uuid::Uuid::new_v4().to_string();
+    let mut no_final = observation(&delayed,"completed",4);no_final.turn_pack=None;
+    assert_eq!(observer.observe_desktop_snapshot(&binding,&[no_final]).unwrap(),0);
+    assert_eq!(observer.observe_desktop_snapshot(&binding,&[observation(&delayed,"completed",4)]).unwrap(),1);
+    let mut stale = binding.clone();stale.generation+=1;
+    assert!(matches!(observer.observe_desktop_snapshot(&stale,&[]),Err(StoreError::BindingChanged)));
+    drop(observer);drop(store);
+    let store = StateStore::open(&path).unwrap();
+    assert_eq!(store.pending_summary_completion_count(&task).unwrap(),2);
+    assert_eq!(store.schema_version().unwrap(),7);
+}
+
+#[test]
 fn per_slot_clear_preserves_other_queues_fences_workers_and_preserves_new_work() {
     use easy_codex_host::store::SummaryClaimResult;
     let temporary = tempfile::tempdir().unwrap();

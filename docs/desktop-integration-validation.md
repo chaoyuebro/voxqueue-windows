@@ -1,5 +1,7 @@
 # Windows 桌面投递接入验证
 
+后续 Windows 状态判断和总结收集已切换为直接订阅桌面通知，见 [桌面任务状态通知](desktop-state-notifications.md)。本文的 JSONL 空闲/完成监听描述仅记录先前版本。
+
 日期：2026-10-05。验证桌面版本：OpenAI.Codex 26.930.4958.0。
 
 ## 接入内容
