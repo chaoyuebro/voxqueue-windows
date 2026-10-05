@@ -38,7 +38,7 @@ fn authenticated_udp_updates_volume_rejects_tampering_and_expires() {
     }
     let count = ingress.diagnostics().heartbeat_authenticated;
     let mut altered = packet(5, 1, &key); altered[6] = 7;
-    for invalid in [altered, packet(11, 1, &key), packet(5, 2, &key)] {
+    for invalid in [altered, packet(11, 1, &key), packet(5, 3, &key)] {
         socket.send_to(&invalid, target).unwrap();
     }
     std::thread::sleep(Duration::from_millis(150));

@@ -199,8 +199,24 @@ function renderDashboard(snapshot) {
       button.addEventListener("click", () => void bindSlot(slot.slot, newRow));
       openButton.addEventListener("click", () => void openTask(newRow));
       childElement(newRow, ".clear-queue-button").addEventListener("click", () => void clearQueue(slot.slot, newRow));
+      childElement(newRow, ".retry-button").addEventListener("click", async () => {
+        const current = dashboard?.slots.find((entry) => entry.slot === slot.slot);
+        if (!current?.failed_request_id || current.binding_generation == null) return;
+        const retryButton = childElement(newRow, ".retry-button");
+        retryButton.disabled = true;
+        const status = childElement(newRow, ".clear-queue-status");
+        try {
+          renderDashboard(await window.__TAURI__.core.invoke("retry_failed_input", {
+            slot: slot.slot, expectedGeneration: current.binding_generation, original: current.failed_request_id,
+          }));
+          status.textContent = "已重新排队，无需再次录音";
+        } catch { status.textContent = "重试失败，请刷新后检查当前绑定"; }
+        finally { retryButton.disabled = false; }
+      });
       elements.slots.append(newRow);
     }
+    childElement(row, ".retry-input").hidden = !slot.failed_request_id;
+    childElement(row, ".failed-prompt").textContent = slot.failed_prompt ? `识别文字：${slot.failed_prompt}` : "";
     row.classList.toggle("selected", slot.slot === selectedSlot);
     const clearButton = /** @type {HTMLButtonElement} */ (childElement(row, ".clear-queue-button"));
     clearButton.disabled = !slot.task_id || clearingSlots.has(slot.slot);
@@ -489,6 +505,7 @@ const answerVoiceUI = {
   voice: /** @type {HTMLSelectElement} */ (requiredElement("#answer-voice")),
   speed: /** @type {HTMLInputElement} */ (requiredElement("#answer-speed")),
   value: requiredElement("#answer-speed-value"),
+  preview: /** @type {HTMLButtonElement} */ (requiredElement("#answer-voice-preview")),
   save: /** @type {HTMLButtonElement} */ (requiredElement("#answer-voice-save")),
   status: requiredElement("#answer-voice-status"),
 };
@@ -532,9 +549,21 @@ async function loadAnswerVoiceSettings() {
     answerVoiceUI.voice.disabled = false;
     answerVoiceUI.speed.disabled = false;
     answerVoiceUI.save.disabled = false;
+    answerVoiceUI.preview.disabled = false;
     answerVoiceUI.status.textContent = "设置重启后保留";
   } catch (error) {
     answerVoiceUI.status.textContent = `设置读取失败：${String(error)}`;
   }
 }
 void loadAnswerVoiceSettings();
+
+answerVoiceUI.preview.addEventListener("click", async () => {
+  answerVoiceUI.preview.disabled = true;
+  answerVoiceUI.status.textContent = "正在生成试听…";
+  try {
+    answerVoiceUI.status.textContent = await window.__TAURI__.core.invoke("preview_answer_voice", {
+      settings: { voice: answerVoiceUI.voice.value, speed: Number(answerVoiceUI.speed.value), volume: 1 },
+    });
+  } catch (error) { answerVoiceUI.status.textContent = `试听失败：${String(error)}`; }
+  finally { answerVoiceUI.preview.disabled = false; }
+});

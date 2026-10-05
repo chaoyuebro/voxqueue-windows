@@ -132,6 +132,7 @@ enum LanPlaybackCommand {
     FinishAck(PlaybackIdentity),
     Cancel(PlaybackIdentity),
     Mailbox(MailboxStatus),
+    Preview(u32, zeroize::Zeroizing<Vec<u8>>, mpsc::SyncSender<bool>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,6 +278,8 @@ struct LanVoiceDiagnostics {
     heartbeat_received: AtomicU64,
     heartbeat_authenticated: AtomicU64,
     keyboard_volume: Mutex<Option<(u8, Instant)>>,
+    preview_supported: AtomicBool,
+    preview_busy: Arc<AtomicBool>,
     mailbox_sent: AtomicU64,
     mailbox_send_failed: AtomicU64,
     playback_received: AtomicU64,
@@ -307,6 +310,10 @@ pub struct LanVoiceDiagnosticsSnapshot {
     pub heartbeat_authenticated: u64,
     #[serde(default)]
     pub keyboard_volume_percent: Option<u8>,
+    #[serde(default)]
+    pub preview_supported: bool,
+    #[serde(default)]
+    pub preview_busy: bool,
     pub mailbox_sent: u64,
     pub mailbox_send_failed: u64,
     pub playback_received: u64,
@@ -386,6 +393,7 @@ impl LanVoiceIngress {
             .spawn(move || {
                 let mut assembler = CaptureAssembler::new(config.auth_key);
                 let mut playback = ActiveLanPlayback::default();
+                playback.busy = Some(Arc::clone(&ingress_diagnostics.preview_busy));
                 let mut next_auth_reload = Instant::now();
                 let mut datagram = [0_u8; 1200];
                 while !ingress_shutdown.load(Ordering::Acquire) {
@@ -423,7 +431,8 @@ impl LanVoiceIngress {
                                     match playback.handle_heartbeat(packet, source, key, &socket) {
                                         HeartbeatResponse::Invalid => {}
                                         HeartbeatResponse::SendFailed(volume) => {
-                                            if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
+                                            ingress_diagnostics.preview_supported.store(packet[7] == 2, Ordering::Relaxed);
+                                    if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
                                                 *reading = volume.map(|level| (level * 10, Instant::now()));
                                             }
                                             ingress_diagnostics
@@ -434,7 +443,8 @@ impl LanVoiceIngress {
                                                 .fetch_add(1, Ordering::Relaxed);
                                         }
                                         HeartbeatResponse::Sent(volume) => {
-                                            if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
+                                            ingress_diagnostics.preview_supported.store(packet[7] == 2, Ordering::Relaxed);
+                                    if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
                                                 *reading = volume.map(|level| (level * 10, Instant::now()));
                                             }
                                             ingress_diagnostics
@@ -576,6 +586,8 @@ impl LanVoiceIngress {
                 .diagnostics
                 .heartbeat_authenticated
                 .load(Ordering::Relaxed),
+            preview_busy: self.diagnostics.preview_busy.load(Ordering::Relaxed),
+            preview_supported: self.diagnostics.preview_supported.load(Ordering::Relaxed),
             keyboard_volume_percent: self.diagnostics.keyboard_volume.lock().ok()
                 .and_then(|reading| *reading)
                 .filter(|(_, received)| received.elapsed() < Duration::from_secs(12))
@@ -664,6 +676,15 @@ impl LanVoiceIngress {
         self.playback_commands
             .send(LanPlaybackCommand::Cancel(identity))
             .is_ok()
+    }
+
+    pub fn preview_audio(&self, token: u32, audio: zeroize::Zeroizing<Vec<u8>>) -> bool {
+        if token & 0x8000_0000 == 0 || audio.len() > 1024 * 1024
+            || crate::audio::inspect_eiad(&audio).is_err()
+            || !self.diagnostics().preview_supported || self.diagnostics().keyboard_volume_percent.is_none() { return false; }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.playback_commands.send(LanPlaybackCommand::Preview(token, audio, sender)).is_ok()
+            && receiver.recv_timeout(Duration::from_millis(750)).unwrap_or(false)
     }
 
     pub fn publish_mailbox_status(&self, status: MailboxStatus) -> bool {
@@ -760,6 +781,8 @@ struct ActiveLanPlayback {
     retired_cancel: Option<RetiredPlaybackFinish>,
     accepted_requests: BTreeMap<(u8, u32), u32>,
     mailbox_status: MailboxStatus,
+    preview: Option<(u32, zeroize::Zeroizing<Vec<u8>>, Instant)>,
+    busy: Option<Arc<AtomicBool>>,
 }
 
 impl ActiveLanPlayback {
@@ -835,6 +858,11 @@ impl ActiveLanPlayback {
                 }
             }
             LanPlaybackCommand::Mailbox(status) => self.mailbox_status = status,
+            LanPlaybackCommand::Preview(token, audio, reply) => {
+                let available = self.transfer.is_none() && self.preview.as_ref().is_none_or(|(_, _, deadline)| *deadline < Instant::now());
+                if available { self.preview = Some((token, audio, Instant::now() + Duration::from_secs(30))); }
+                let _ = reply.send(available);
+            }
         }
     }
 
@@ -849,7 +877,7 @@ impl ActiveLanPlayback {
             || packet[..4] != *b"EIHB"
             || packet[4] != 1
             || packet[5] & !0x03 != 0
-            || !(packet[6..8] == [0, 0] || (packet[7] == 1 && packet[6] <= 10))
+            || !(packet[6..8] == [0, 0] || (matches!(packet[7], 1 | 2) && packet[6] <= 10))
             || packet[20..24] != *b"EISD"
             || packet[24] != 1
             || packet[25] != 60
@@ -873,14 +901,17 @@ impl ActiveLanPlayback {
             return HeartbeatResponse::Invalid;
         }
         let heartbeat_sequence = u32::from_le_bytes(packet[16..20].try_into().unwrap());
-        let Ok(response) = encode_mailbox_status(self.mailbox_status, heartbeat_sequence, key)
+        let Ok(response) = (if let Some((token, _, deadline)) = self.preview.as_ref().filter(|(_, _, deadline)| *deadline > Instant::now()) {
+            let _ = deadline;
+            crate::lan_playback::encode_preview_mailbox(self.mailbox_status, heartbeat_sequence, *token, key)
+        } else { encode_mailbox_status(self.mailbox_status, heartbeat_sequence, key) })
         else {
             return HeartbeatResponse::Invalid;
         };
-        debug_assert_eq!(response.len(), MAILBOX_STATUS_BYTES);
+        debug_assert!(matches!(response.len(), MAILBOX_STATUS_BYTES | 36));
         match socket.send_to(&response, source) {
-            Ok(length) if length == response.len() => HeartbeatResponse::Sent((packet[7] == 1).then_some(packet[6])),
-            _ => HeartbeatResponse::SendFailed((packet[7] == 1).then_some(packet[6])),
+            Ok(length) if length == response.len() => HeartbeatResponse::Sent((matches!(packet[7], 1 | 2)).then_some(packet[6])),
+            _ => HeartbeatResponse::SendFailed((matches!(packet[7], 1 | 2)).then_some(packet[6])),
         }
     }
 
@@ -900,6 +931,22 @@ impl ActiveLanPlayback {
                     return;
                 }
             };
+            if request.request_generation & 0x8000_0000 != 0 {
+                if let Some((token, _, deadline)) = self.preview.as_ref() {
+                    if *token != request.request_generation || *deadline < Instant::now() || self.transfer.is_some() { return; }
+                } else { return; }
+                let (token, audio, _) = self.preview.take().unwrap();
+                let Ok(metadata) = crate::audio::inspect_eiad(&audio) else { return; };
+                let Ok(audio) = crate::audio::transcode_eiad_for_device(&audio) else { return; };
+                let begin = PlaybackBegin {
+                    identity: PlaybackIdentity { slot: request.slot, request_generation: token,
+                        connection_generation: request.connection_generation, summary_generation: token as u64, lease: token as u64 },
+                    total_bytes: audio.len() as u32, total_samples: metadata.samples,
+                    chunk_bytes: PLAYBACK_CHUNK_BYTES as u16, request_nonce: request.nonce,
+                };
+                self.handle_command(LanPlaybackCommand::Start(LanPlaybackStart { begin, source, eiad: audio }), socket, Some(key), events);
+                return;
+            }
             if !self.accept_request_generation(request) {
                 eprintln!("lan_playback=request_replayed slot={}", request.slot);
                 return;
@@ -943,6 +990,11 @@ impl ActiveLanPlayback {
                     PlaybackSendPhase::DeviceFinished | PlaybackSendPhase::HostCommit
                 )
             {
+                return;
+            }
+            if finished.identity.request_generation & 0x8000_0000 != 0 {
+                transfer.phase = PlaybackSendPhase::HostCommit;
+                self.handle_command(LanPlaybackCommand::FinishAck(finished.identity), socket, Some(key), events);
                 return;
             }
             if transfer.phase == PlaybackSendPhase::DeviceFinished {
@@ -1133,6 +1185,10 @@ impl ActiveLanPlayback {
         key: Option<&[u8; 32]>,
         events: &mpsc::Sender<LanPlaybackEvent>,
     ) {
+        if self.preview.as_ref().is_some_and(|(_, _, deadline)| *deadline <= Instant::now()) {
+            self.preview = None;
+        }
+        if let Some(busy) = &self.busy { busy.store(self.transfer.is_some() || self.preview.is_some(), Ordering::Relaxed); }
         if self
             .retired_finish
             .is_some_and(|retired| retired.expires_at <= Instant::now())

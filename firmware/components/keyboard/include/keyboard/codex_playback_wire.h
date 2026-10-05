@@ -62,6 +62,7 @@ struct PlaybackWireFinished {
 };
 
 struct MailboxWireStatus {
+  std::uint32_t preview_token = 0U;
   std::uint8_t unread_slots = 0U;
   std::uint8_t running_tasks = 0U;
   bool desktop_running = false;

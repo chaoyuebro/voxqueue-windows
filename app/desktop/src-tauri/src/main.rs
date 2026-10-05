@@ -272,6 +272,8 @@ fn main() {
             host_dashboard,
             bind_slot,
             clear_summary_queue,
+            retry_failed_input,
+            preview_answer_voice,
             answer_voice_settings,
             save_answer_voice_settings,
             open_codex_task,
@@ -340,4 +342,44 @@ fn start_firmware_flash(app: tauri::AppHandle, state: tauri::State<'_, firmware_
 #[tauri::command]
 fn cancel_firmware_flash(state: tauri::State<'_, firmware_flash::FirmwareFlasher>) -> Result<(), String> {
     state.cancel_wait()
+}
+
+#[tauri::command]
+fn retry_failed_input(slot: u8, expected_generation: u64, original: String) -> Result<DashboardSnapshot, String> {
+    let paths = app_paths().ok_or("home_unavailable")?;
+    easy_codex_host::health::retry_dashboard_input(&paths.runtime_directory.join(HEALTH_SOCKET_NAME), slot, expected_generation, original)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn preview_answer_voice(settings: easy_codex_host::voice_settings::VoiceSettings) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        static BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if BUSY.swap(true, std::sync::atomic::Ordering::AcqRel) { return Err("正在生成试听，请稍候".into()); }
+        struct Reset;
+        impl Drop for Reset { fn drop(&mut self) { BUSY.store(false, std::sync::atomic::Ordering::Release); } }
+        let _reset = Reset;
+        settings.validate().map_err(|e| e.to_string())?;
+        let paths = app_paths().ok_or("home_unavailable")?;
+        let socket = paths.runtime_directory.join(HEALTH_SOCKET_NAME);
+        let dashboard = query_dashboard(&socket).map_err(|e| e.to_string())?;
+        if !dashboard.lan.preview_supported { return Err("请先在固件烧录页更新支持试听的固件".into()); }
+        if dashboard.lan.keyboard_volume_percent.is_none() { return Err("键盘离线，请连接后再试听".into()); }
+        if dashboard.lan.preview_busy { return Err("键盘正在播放或已有试听待播，请结束后再试听".into()); }
+        let key = easy_codex_host::windows_credential::read_minimax_key()
+            .map_err(|e| e.to_string())?.ok_or("请先配置语音服务")?;
+        let client = easy_codex_host::minimax::VoiceClient::new().map_err(|e| e.to_string())?;
+        let audio = client.synthesize_with_settings(&key, "你好，这是 VoxQueue 播报试听。你可以调整音色、语速，并转动旋钮调节音量。", &settings)
+            .map_err(|_| "试听生成失败，请检查语音服务后重试".to_string())?;
+        let encoded = easy_codex_host::audio::encode_tts_audio(audio.pcm()).map_err(|e| e.to_string())?;
+        let id = uuid::Uuid::new_v4();
+        let token = u32::from_le_bytes(id.as_bytes()[..4].try_into().unwrap()) | 0x8000_0000;
+        let path = paths.runtime_directory.join(format!("preview-{id}.eiad"));
+        std::fs::write(&path, encoded.eiad()).map_err(|e| e.to_string())?;
+        let result = easy_codex_host::health::preview_dashboard_audio(&socket, id.to_string(), token);
+        let _ = std::fs::remove_file(path);
+        result.map_err(|e| e.to_string())?;
+        Ok("试听已准备，键盘将在空闲时播放（等待最多 30 秒）；可用旋钮调节音量".into())
+    }).await.map_err(|e| e.to_string())?
 }

@@ -342,3 +342,7 @@ kbd {
 .answer-voice-form button { padding: 8px; border: 1px solid #bd5b3c; border-radius: 6px; color: #bd5b3c; background: #fff; font-size: 12px; }
 .answer-voice-form button:disabled { opacity: .5; }
 .answer-voice-form p { margin: 0; font-size: 11px; line-height: 1.5; color: #887565; }
+
+.retry-input { margin-top: 10px; }
+.failed-prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8em; overflow: auto; }
+.retry-input small { display: block; margin-top: 6px; color: var(--muted); }

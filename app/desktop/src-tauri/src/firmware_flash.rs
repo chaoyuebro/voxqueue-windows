@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 pub const BOOTLOADER_SHA: &str = "be3abea605a6be7f04c2d0f4011bd90688f799a834a164cdc6a29b16c3324287";
 pub const PARTITION_SHA: &str = "7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278";
-pub const FIRMWARE_SHA: &str = "93d93d9e9177841ba7a91c4a52517587370cf5a272dc2ce274076b203fe85ed7";
+pub const FIRMWARE_SHA: &str = "c9647dd841802b510d8fe970960e51790da3bc92172b68cce9b651585d75a910";
 
 #[derive(Clone, Serialize)]
 pub struct FirmwareInfo {
@@ -61,7 +61,7 @@ fn restore_sha() -> String {
 
 pub fn info(resources: &Path) -> FirmwareInfo {
     FirmwareInfo {
-        name: "2026.10.06 · 键盘音量上报 · VoxQueue 完整恢复包",
+        name: "2026.10.06 · 播报试听与音量显示 · VoxQueue 完整恢复包",
         sha256: restore_sha(),
         images: IMAGES.to_vec(),
         available: cfg!(windows)
@@ -540,7 +540,7 @@ mod tests {
         for (source, image) in [
             "bootloader-20261005.bin",
             "partition-table-20261005.bin",
-            "keyboard-volume-20261006.bin",
+            "voice-preview-20261006.bin",
         ]
         .into_iter()
         .zip(IMAGES)

@@ -663,6 +663,32 @@ impl StateStore {
         ).optional()?)
     }
 
+    /// Only the exact failed input in the current binding can be retried.
+    pub fn failed_input(&self, task_id: &str, generation: u64, slot: u8) -> Result<Option<(String, String)>, StoreError> {
+        Ok(self.connection.query_row(
+            "SELECT request_id, prompt FROM jobs WHERE request_id=(SELECT request_id FROM jobs WHERE task_id=?1 AND generation=?2 AND slot=?3 ORDER BY sequence DESC LIMIT 1) AND state='failed'",
+            params![task_id, to_i64(generation)?, slot], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?)
+    }
+
+    pub fn retry_failed_input(&mut self, slot: u8, generation: u64, original: &str) -> Result<(), StoreError> {
+        let binding = self.binding(slot)?.ok_or(StoreError::BindingChanged)?;
+        if binding.generation != generation { return Err(StoreError::BindingChanged); }
+        let job = self.connection.query_row(
+            "SELECT request_id, task_id, slot, generation, prompt, cwd, recovery_count, claim_generation FROM jobs WHERE request_id=?1 AND state='failed'",
+            [original], map_job,
+        ).optional()?.ok_or(StoreError::InvalidJob)?;
+        if job.task_id != binding.task_id || job.generation != generation || job.slot != slot {
+            return Err(StoreError::BindingChanged);
+        }
+        // One durable child per failed attempt makes repeated clicks idempotent.
+        use sha2::{Digest, Sha256};
+        let request_id = format!("retry-{:x}", Sha256::digest(original.as_bytes()));
+        self.enqueue(&NewJob { request_id: &request_id, task_id: &job.task_id,
+            slot, generation, prompt: &job.prompt, cwd: &job.cwd })?;
+        Ok(())
+    }
+
     pub fn rollout_cursor(&self, task_id: &str) -> Result<Option<RolloutCursor>, StoreError> {
         query_rollout_cursor(&self.connection, task_id)
     }

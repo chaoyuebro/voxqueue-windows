@@ -136,6 +136,10 @@ enum HostRequest {
     Dashboard {
         v: u8,
     },
+    PreviewAudio { v: u8, id: String, token: u32 },
+    RetryInput {
+        v: u8, slot: u8, expected_generation: u64, original: String,
+    },
     ClearSummaryQueue {
         v: u8,
         slot: u8,
@@ -194,6 +198,10 @@ pub struct DashboardSlot {
     pub pending_jobs: u32,
     pub unread_generation: Option<u64>,
     pub unread_coverage: Option<u32>,
+    #[serde(default)]
+    pub failed_request_id: Option<String>,
+    #[serde(default)]
+    pub failed_prompt: Option<String>,
     pub latest_job_state: Option<String>,
     pub latest_job_failure: Option<String>,
     pub latest_job_updated_at: Option<i64>,
@@ -222,6 +230,11 @@ pub struct DashboardSnapshot {
 }
 
 enum ControlRequest {
+    PreviewAudio { id: String, token: u32, reply: mpsc::SyncSender<Result<DashboardSnapshot, &'static str>> },
+    RetryInput {
+        slot: u8, expected_generation: u64, original: String,
+        reply: mpsc::SyncSender<Result<DashboardSnapshot, &'static str>>,
+    },
     ClearSummaryQueue {
         slot: u8,
         expected_generation: u64,
@@ -447,7 +460,7 @@ impl HostDaemon {
                     command,
                     &mut self.store,
                     &self.catalog,
-                    self.lan_voice.diagnostics(),
+                    &self.lan_voice,
                     #[cfg(all(any(target_os = "macos", windows), not(test)))]
                     &self.paths,
                 );
@@ -746,10 +759,36 @@ fn process_control_request(
     request: ControlRequest,
     store: &mut StateStore,
     catalog: &CodexTaskCatalog,
-    lan: LanVoiceDiagnosticsSnapshot,
+    ingress: &LanVoiceIngress,
     #[cfg(all(any(target_os = "macos", windows), not(test)))] paths: &AppPaths,
 ) {
+    let lan = ingress.diagnostics();
     match request {
+        ControlRequest::PreviewAudio { id, token, reply } => {
+            #[cfg(all(windows, not(test)))]
+            let result = (|| {
+                if !lan.preview_supported || lan.keyboard_volume_percent.is_none() { return Err("preview_firmware_required"); }
+                let id = uuid::Uuid::parse_str(&id).map_err(|_| "invalid_preview")?;
+                let path = paths.runtime_directory.join(format!("preview-{id}.eiad"));
+                let metadata = std::fs::symlink_metadata(&path).map_err(|_| "invalid_preview")?;
+                if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 1024 * 1024 { return Err("invalid_preview"); }
+                let audio = std::fs::read(&path).map_err(|_| "invalid_preview")?;
+                let _ = std::fs::remove_file(&path);
+                crate::audio::inspect_eiad(&audio).map_err(|_| "invalid_preview")?;
+                if !ingress.preview_audio(token, zeroize::Zeroizing::new(audio)) { return Err("preview_busy"); }
+                build_dashboard(store, catalog, lan, paths)
+            })();
+            #[cfg(not(all(windows, not(test))))]
+            let result = { let _ = (id, token); Err("preview_unavailable") };
+            let _ = reply.send(result);
+        }
+        ControlRequest::RetryInput { slot, expected_generation, original, reply } => {
+            let result = store.retry_failed_input(slot, expected_generation, &original)
+                .map_err(|_| "retry_rejected")
+                .and_then(|_| build_dashboard(store, catalog, lan,
+                    #[cfg(all(any(target_os = "macos", windows), not(test)))] paths));
+            let _ = reply.send(result);
+        }
         ControlRequest::ClearSummaryQueue { slot, expected_generation, reply } => {
             let result = store.clear_slot_summary_queue(slot, expected_generation).map_err(|error| match error {
                 StoreError::BindingChanged => "stale_binding", _ => "state_failed",
@@ -834,7 +873,13 @@ fn build_dashboard(
             .transpose()
             .map_err(|_| "state_failed")?
             .flatten();
+        let failed = if latest_job.as_ref().is_some_and(|job| job.0 == "failed") {
+            binding.map(|binding| store.failed_input(&binding.task_id, binding.generation, slot))
+                .transpose().map_err(|_| "state_failed")?.flatten()
+        } else { None };
         slots.push(DashboardSlot {
+            failed_request_id: failed.as_ref().map(|input| input.0.clone()),
+            failed_prompt: failed.map(|input| input.1),
             slot,
             task_id: binding.map(|binding| binding.task_id.clone()),
             task_name: task.map(|task| task.name.clone()),
@@ -935,6 +980,10 @@ fn handle_client(
             |reply| ControlRequest::Dashboard { reply },
             deadline,
         ),
+        Ok(HostRequest::PreviewAudio { v: HEALTH_PROTOCOL_VERSION, id, token }) => forward_control(
+            &mut stream, control, |reply| ControlRequest::PreviewAudio { id, token, reply }, deadline),
+        Ok(HostRequest::RetryInput { v: HEALTH_PROTOCOL_VERSION, slot, expected_generation, original }) => forward_control(
+            &mut stream, control, |reply| ControlRequest::RetryInput { slot, expected_generation, original, reply }, deadline),
         Ok(HostRequest::ClearSummaryQueue { v: HEALTH_PROTOCOL_VERSION, slot, expected_generation }) => forward_control(
             &mut stream, control, |reply| ControlRequest::ClearSummaryQueue { slot, expected_generation, reply }, deadline),
         Ok(HostRequest::BindSlot {
@@ -2057,4 +2106,12 @@ mod tests {
         entries.sort();
         assert_eq!(entries, vec![HEALTH_SOCKET_NAME]);
     }
+}
+
+pub fn retry_dashboard_input(socket_path: &Path, slot: u8, expected_generation: u64, original: String) -> Result<DashboardSnapshot, HealthError> {
+    query_host(socket_path, &HostRequest::RetryInput { v: HEALTH_PROTOCOL_VERSION, slot, expected_generation, original })
+}
+
+pub fn preview_dashboard_audio(socket_path: &Path, id: String, token: u32) -> Result<DashboardSnapshot, HealthError> {
+    query_host(socket_path, &HostRequest::PreviewAudio { v: HEALTH_PROTOCOL_VERSION, id, token })
 }

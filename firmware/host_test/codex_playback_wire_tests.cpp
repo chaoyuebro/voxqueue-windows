@@ -193,6 +193,20 @@ void desktop_presence_wire_matches_rust() {
   assert(!easy_codex::decode_mailbox_status(packet2.data(), packet2.size(), key, &status));
 }
 
+void preview_mailbox_is_authenticated_and_bounded() {
+  std::array<std::uint8_t, 32> key{}; key.fill(0x11U);
+  std::array<std::uint8_t, 36> packet{{0x45, 0x49, 0x4d, 0x42, 0x05, 0x05, 0x03, 0x01, 0x44, 0x33, 0x22, 0x11, 0x07, 0x00, 0x02, 0x00, 0x23, 0x01, 0x00, 0x80, 0x10, 0xfe, 0x75, 0x9b, 0x37, 0xc0, 0x31, 0x41, 0x0a, 0x01, 0x62, 0xb9, 0xaf, 0x19, 0xfe, 0x3e}};
+  easy_codex::MailboxWireStatus status{};
+  assert(easy_codex::decode_mailbox_status(packet.data(), packet.size(), key, &status));
+  assert(!easy_codex::decode_mailbox_status(nullptr, 36U, key, &status));
+  assert(status.preview_token == 0x80000123U);
+  assert(status.heartbeat_sequence == 0x11223344U);
+  assert(status.desktop_running);
+  packet[16] ^= 1U;
+  assert(!easy_codex::decode_mailbox_status(packet.data(), packet.size(), key, &status));
+  assert(!easy_codex::decode_mailbox_status(packet.data(), 32U, key, &status));
+}
+
 void mailbox_status_matches_rust_golden_and_fails_closed() {
   std::array<std::uint8_t, 32> key{};
   key.fill(0x11U);
@@ -218,6 +232,7 @@ int main() {
   host_packets_decode_and_device_packets_encode();
   replayed_data_must_match_the_received_prefix();
   mailbox_status_matches_rust_golden_and_fails_closed();
+  preview_mailbox_is_authenticated_and_bounded();
   desktop_presence_wire_matches_rust();
   return 0;
 }

@@ -2778,6 +2778,12 @@ void apply_pending_mailbox_status(AppContext* app, std::uint32_t now_ms) {
   if (!app->audio.take_pending_mailbox_status(&status)) {
     return;
   }
+#if defined(EASY_INPUT_SPEAKER_ASSETS_PRODUCT)
+  if (status.preview_token != 0U) {
+    const auto wifi = app->audio.wifi_service_snapshot();
+    app->codex_playback.request_preview(status.preview_token, wifi.generation);
+  }
+#endif
   app->leds.set_mailbox_status(
       status.unread_slots, status.coverage_by_slot, status.running_tasks,
       status.desktop_running, now_ms);

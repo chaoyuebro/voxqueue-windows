@@ -30,6 +30,7 @@ class CodexLanPlayback {
   bool request(std::uint8_t slot,
                std::uint32_t request_generation,
                std::uint32_t connection_generation);
+  bool request_preview(std::uint32_t token, std::uint32_t connection_generation);
   void preempt(const easy_codex::PlaybackIdentity& identity);
   void poll();
   bool active() const;
@@ -75,6 +76,8 @@ class CodexLanPlayback {
   std::uint32_t host_ipv4_ = 0U;
   std::uint16_t host_port_ = 0U;
   int socket_ = -1;
+  bool preview_ = false;
+  std::uint32_t last_preview_token_ = 0;
   Phase phase_ = Phase::Idle;
   easy_codex::PlaybackWireRequest request_{};
   easy_codex::PlaybackWireBegin begin_{};

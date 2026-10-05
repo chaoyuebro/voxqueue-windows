@@ -57,6 +57,14 @@ esp_err_t CodexLanPlayback::begin(
   return ESP_OK;
 }
 
+bool CodexLanPlayback::request_preview(std::uint32_t token, std::uint32_t connection_generation) {
+  if ((token & 0x80000000U) == 0U || token == last_preview_token_ || active() || audio_->streaming() || speaker_->busy()) return false;
+  if (!request(1U, token, connection_generation)) return false;
+  preview_ = true;
+  last_preview_token_ = token;
+  return true;
+}
+
 bool CodexLanPlayback::request(
     std::uint8_t slot,
     std::uint32_t request_generation,
@@ -186,8 +194,8 @@ void CodexLanPlayback::poll() {
   } else if (phase_ == Phase::Playing && !speaker_->busy()) {
     if (speaker_->last_result() ==
             ai_keyboard::SpeakerPlaybackResult::Succeeded &&
-        slots_->mark_playback_drained(
-            slot_identity(), begin_.total_samples)) {
+        (preview_ || slots_->mark_playback_drained(
+            slot_identity(), begin_.total_samples))) {
       phase_ = Phase::FinishedPendingAck;
       finished_retries_ = 0U;
       if (!send_finished()) {
@@ -366,7 +374,7 @@ void CodexLanPlayback::handle_begin(
       total_frames,
       decoded.total_samples,
   };
-  if (slots_->begin_playback(state_begin) !=
+  if (!preview_ && slots_->begin_playback(state_begin) !=
       easy_codex::PlaybackBeginResult::Accepted) {
     begin_ = {};
     return;
@@ -374,7 +382,7 @@ void CodexLanPlayback::handle_begin(
   encoded_ = static_cast<std::uint8_t*>(heap_caps_malloc(
       decoded.total_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (encoded_ == nullptr) {
-    slots_->abort_playback(slot_identity());
+    if (!preview_) slots_->abort_playback(slot_identity());
     fail("psram_allocate");
     return;
   }
@@ -466,7 +474,7 @@ void CodexLanPlayback::handle_finished_ack(
   if (phase_ != Phase::FinishedPendingAck || status != 0U) {
     return;
   }
-  if (slots_->acknowledge_finished(slot_identity())) {
+  if (preview_ || slots_->acknowledge_finished(slot_identity())) {
     ESP_LOGI(kTag,
              "finished_ack slot=%u generation=%llu bytes=%u samples=%llu",
              static_cast<unsigned>(begin_.identity.slot),
@@ -497,7 +505,7 @@ bool CodexLanPlayback::begin_speaker_playback() {
                   speaker_->last_request_failure()));
     return false;
   }
-  if (!slots_->mark_playback_started(slot_identity())) {
+  if (!preview_ && !slots_->mark_playback_started(slot_identity())) {
     failure_diagnostic_ = 2U;
     return false;
   }
@@ -516,8 +524,8 @@ bool CodexLanPlayback::mark_transfer_complete() {
   const auto frame_count =
       (begin_.total_bytes + begin_.chunk_bytes - 1U) / begin_.chunk_bytes;
   if (frame_count == 0U ||
-      !slots_->mark_playback_transfer_complete(
-          slot_identity(), frame_count - 1U)) {
+      (!preview_ && !slots_->mark_playback_transfer_complete(
+          slot_identity(), frame_count - 1U))) {
     failure_diagnostic_ = 3U;
     speaker_->poll(false);
     return false;
@@ -580,7 +588,7 @@ void CodexLanPlayback::fail(const char* reason) {
   ESP_LOGW(kTag, "failed phase=%u reason=%s",
            static_cast<unsigned>(phase_), last_failure_);
   if (easy_codex::valid_playback_identity(slot_identity())) {
-    slots_->abort_playback(slot_identity());
+    if (!preview_) slots_->abort_playback(slot_identity());
   }
   stream_cancelled_.store(true, std::memory_order_release);
   phase_ = Phase::Cancelling;
@@ -600,7 +608,7 @@ void CodexLanPlayback::cleanup(bool abort_slot) {
     socket_ = -1;
   }
   if (abort_slot && easy_codex::valid_playback_identity(slot_identity())) {
-    slots_->abort_playback(slot_identity());
+    if (!preview_) slots_->abort_playback(slot_identity());
   }
   if (encoded_ != nullptr) {
     std::memset(encoded_, 0, begin_.total_bytes);
@@ -623,6 +631,7 @@ void CodexLanPlayback::cleanup(bool abort_slot) {
   cancel_retries_ = 0U;
   cancel_acknowledged_ = false;
   failure_diagnostic_ = 0U;
+  preview_ = false;
   phase_ = Phase::Idle;
 }
 

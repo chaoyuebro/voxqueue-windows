@@ -28,16 +28,16 @@ VoxQueue 分区表仅含一个 factory 应用，没有 otadata 或 OTA 应用入
 | --- | --- | --- |
 | 引导程序 | 0x0 | `be3abea605a6be7f04c2d0f4011bd90688f799a834a164cdc6a29b16c3324287` |
 | 分区表 | 0x8000 | `7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278` |
-| VoxQueue 应用 | 0x10000 | `d7670a545bd35461e0fd6cf3f04d24a4ec1f3ffae64f54924ee3a5a18a7a1cc0` |
+| VoxQueue 应用 | 0x10000 | `c9647dd841802b510d8fe970960e51790da3bc92172b68cce9b651585d75a910` |
 
-恢复包校验值：`05c7a56072db82e888c46c45375943dc604c746ccffb9e831632f52b61281c86`。它包含三段镜像的地址与 SHA，页面确认的是整套恢复计划。
+恢复包校验值：`3b35337d93a129aa19787b679962ebf917bd6c74f01f48b8e2a10c0d0939f389`。它包含三段镜像的地址与 SHA，页面确认的是整套恢复计划。
 
 Git 内保存固定发布镜像：
 - `firmware/releases/bootloader-20261005.bin`
 - `firmware/releases/partition-table-20261005.bin`
-- `firmware/releases/desktop-presence-20261005.bin`
+- `firmware/releases/voice-preview-20261006.bin`
 
-三份镜像均来自前次 ESP-IDF 5.5.5 构建，应用行为保持桌面软件运行指示灯版本。
+应用更新为音量上报与独立播报试听版本；引导程序和分区表沿用已验证的固定发布镜像。
 安装包携带镜像和官方 esptool 4.12.0 独立程序，用户无需安装 Python 或 ESP-IDF。
 工具来源：https://github.com/espressif/esptool/releases/tag/v4.12.0；包内附带官方 LICENSE 和 README。
 官方工具归档 SHA-256：`42fddc5e6a05716868ad77fb43acbf53be041f97abed87ff850df1dc88140889`。

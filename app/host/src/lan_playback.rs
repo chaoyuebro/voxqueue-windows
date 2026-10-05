@@ -652,3 +652,15 @@ mod tests {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 }
+
+/// Authenticated one-shot preview trigger; normal mailbox packets stay v4.
+pub fn encode_preview_mailbox(status: MailboxStatus, sequence: u32, token: u32, key: &[u8; 32]) -> Result<Vec<u8>, PlaybackWireError> {
+    if token & 0x8000_0000 == 0 { return Err(PlaybackWireError::Malformed); }
+    let ordinary = encode_mailbox_status(status, sequence, key)?;
+    let mut packet = vec![0; 36];
+    packet[..16].copy_from_slice(&ordinary[..16]);
+    packet[4] = 5;
+    put_u32(&mut packet, 16, token);
+    sign(&mut packet, key);
+    Ok(packet)
+}

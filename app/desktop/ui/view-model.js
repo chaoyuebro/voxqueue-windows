@@ -44,6 +44,8 @@
  *   pending_jobs: number,
  *   unread_generation: number | null,
  *   unread_coverage: number | null,
+ *   failed_request_id?: string | null,
+ *   failed_prompt?: string | null,
  *   latest_job_state: string | null,
  *   latest_job_failure: string | null,
  *   latest_job_updated_at: number | null
@@ -56,6 +58,7 @@
  *   slots: DashboardSlot[],
  *   lan: {
  *     keyboard_volume_percent?: number | null,
+ *     preview_supported?: boolean,
  *     secret_file_present: boolean,
  *     secret_file_readable: boolean,
  *     auth_key_loaded: boolean,

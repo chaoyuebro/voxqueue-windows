@@ -390,13 +390,16 @@ bool decode_mailbox_status(const std::uint8_t* packet,
                            std::size_t packet_size,
                            const std::array<std::uint8_t, 32>& key,
                            MailboxWireStatus* status) {
-  if (status == nullptr || packet_size != kMailboxStatusBytes ||
+  if (status == nullptr || packet == nullptr || !((packet_size == kMailboxStatusBytes && packet[4U] != 5U) ||
+        (packet_size == 36U && packet[4U] == 5U)) ||
       !magic_matches(packet, "EIMB") ||
-      (packet[4U] != 3U && packet[4U] != kMailboxStatusVersion) ||
+      (packet[4U] != 3U && packet[4U] != kMailboxStatusVersion && packet[4U] != 5U) ||
       !authenticate(packet, packet_size, key) ||
       (packet[4U] == 3U && packet[7U] != 0U) || packet[7U] > 1U) {
     return false;
   }
+  status->preview_token = packet[4U] == 5U ? get_u32(packet, 16U) : 0U;
+  if (packet[4U] == 5U && (status->preview_token & 0x80000000U) == 0U) return false;
   status->unread_slots = packet[5U];
   status->running_tasks = packet[6U];
   status->desktop_running = packet[4U] == 3U || packet[7U] == 1U;

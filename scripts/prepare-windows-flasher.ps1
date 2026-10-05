@@ -7,7 +7,7 @@ New-Item -ItemType Directory -Path $voxResources -Force | Out-Null
 $voxImageSpecs = @(
     @('bootloader-20261005.bin', 'current-bootloader.bin', 'BOOTLOADER_SHA'),
     @('partition-table-20261005.bin', 'current-partition-table.bin', 'PARTITION_SHA'),
-    @('keyboard-volume-20261006.bin', 'current-firmware.bin', 'FIRMWARE_SHA')
+    @('voice-preview-20261006.bin', 'current-firmware.bin', 'FIRMWARE_SHA')
 )
 foreach ($voxImageSpec in $voxImageSpecs) {
     $voxFirmware = Join-Path $voxRoot ('firmware\releases\' + $voxImageSpec[0])
