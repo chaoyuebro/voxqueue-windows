@@ -25,7 +25,6 @@ const MAX_DATABASE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DATABASE_WAL_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DATABASE_SHM_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PINNED_CANDIDATES: usize = 64;
-const MAX_RECENT_CANDIDATES: usize = 64;
 // SQLite must be able to inspect and reject an oversized source column before `substr` caps what
 // crosses into Rust. This bounds SQLite's record allocation while keeping the Rust surface tighter.
 const MAX_DATABASE_RECORD_BYTES: i32 = 1024 * 1024;
@@ -35,7 +34,6 @@ const MAX_QUERY_DURATION: Duration = Duration::from_millis(150);
 const CATALOG_READ_ATTEMPTS: usize = 4;
 const CATALOG_RETRY_BASE_DELAY: Duration = Duration::from_millis(10);
 pub const MAX_PINNED_TASKS: usize = 16;
-pub const MAX_RECENT_TASKS: usize = 8;
 pub const MAX_TASK_NAME_CHARS: usize = 96;
 pub const MAX_PROJECT_NAME_CHARS: usize = 64;
 
@@ -169,7 +167,7 @@ impl CodexTaskCatalog {
                 )
             })
             .collect::<Vec<_>>();
-        tasks.extend(recent.into_iter().take(MAX_RECENT_TASKS));
+        tasks.extend(recent);
         Ok(tasks)
     }
 
@@ -183,8 +181,7 @@ impl CodexTaskCatalog {
             .ok_or(CatalogError::NotAllowlisted)
     }
 
-    /// Revalidate an already-authorized binding even after it leaves the recent eight.
-    /// New bindings still go through `allowlisted`; archived/internal/unsafe threads remain excluded.
+    /// Revalidate a binding against the current user-owned task catalog.
     pub fn bound_task(&self, task_id: &str) -> Result<CodexTask, CatalogError> {
         if Uuid::parse_str(task_id).is_err() { return Err(CatalogError::NotAllowlisted); }
         retry_catalog_read(|| {
@@ -358,8 +355,9 @@ fn read_database_with_budget(
 
     let recent_query = format!(
         "SELECT {THREAD_COLUMNS} FROM threads
-         WHERE recency_at_ms IS NOT NULL AND {BOUNDED_THREAD_PREDICATE}
-         ORDER BY recency_at_ms DESC, id DESC LIMIT {MAX_RECENT_CANDIDATES}"
+         WHERE {BOUNDED_THREAD_PREDICATE}
+         ORDER BY MAX(COALESCE(recency_at_ms, 0), COALESCE(updated_at_ms, 0),
+                      COALESCE(updated_at, 0) * 1000) DESC, id DESC"
     );
     let mut recent_statement = connection
         .prepare(&recent_query)
@@ -1475,7 +1473,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_caps_pinned_and_recent_results() {
+    fn catalog_prioritizes_pins_without_truncating_other_results() {
         let temp = tempdir().unwrap();
         write_fixture(temp.path());
         let connection = Connection::open(temp.path().join("state_5.sqlite")).unwrap();
@@ -1530,15 +1528,12 @@ mod tests {
 
         let tasks = test_catalog(temp.path()).list_tasks().unwrap();
 
-        assert_eq!(tasks.len(), MAX_PINNED_TASKS + MAX_RECENT_TASKS);
+        assert_eq!(tasks.iter().filter(|task| task.name.starts_with("Task ")).count(), 40);
         assert_eq!(
             tasks.iter().filter(|task| task.pinned).count(),
             MAX_PINNED_TASKS
         );
-        assert_eq!(
-            tasks.iter().filter(|task| !task.pinned).count(),
-            MAX_RECENT_TASKS
-        );
+        assert!(tasks.iter().filter(|task| !task.pinned).count() >= 24);
     }
 
     #[test]
@@ -1548,7 +1543,7 @@ mod tests {
         let connection = Connection::open(temp.path().join("state_5.sqlite")).unwrap();
         let missing = "019f0000-0000-7000-8000-000000000001";
         let mut pinned = vec![missing.to_owned(), INTERNAL.to_owned()];
-        for position in 0..(MAX_PINNED_TASKS + MAX_RECENT_CANDIDATES + 4) {
+        for position in 0..(MAX_PINNED_TASKS + 64 + 4) {
             let task_id =
                 Uuid::from_u128(0x2000_0000_0000_4000_8000_0000_0000_0000 + position as u128)
                     .to_string();

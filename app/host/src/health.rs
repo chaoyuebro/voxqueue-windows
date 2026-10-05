@@ -72,7 +72,7 @@ const PROVIDER_REGION: &str = "minimax-cn";
 const PROVIDER_REGION: &str = "cn-beijing";
 pub const HEALTH_SOCKET_NAME: &str = "host.sock";
 const MAX_REQUEST_BYTES: usize = 4 * 1024;
-const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ACTIVE_CLIENTS: usize = 16;
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(2);
 const MIN_SOCKET_TIMEOUT: Duration = Duration::from_millis(1);
@@ -1117,8 +1117,6 @@ struct ErrorReplyOwned {
 
 fn validate_dashboard(dashboard: &DashboardSnapshot) -> Result<(), HealthError> {
     if dashboard.v != HEALTH_PROTOCOL_VERSION
-        || dashboard.tasks.len()
-            > crate::codex_catalog::MAX_PINNED_TASKS + crate::codex_catalog::MAX_RECENT_TASKS + 4
         || dashboard.slots.len() != 4
         || dashboard.provider.region != PROVIDER_REGION
         || dashboard.provider.asr_model != ASR_MODEL
