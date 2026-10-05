@@ -15,14 +15,12 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::codex_catalog::{CatalogError, CodexTaskCatalog};
+use crate::rollout_observer::LifecycleRecordParser;
 use crate::store::{Job, JobFailureKind};
 
 type Result<T> = std::result::Result<T, JobFailureKind>;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
-// Desktop tool events can embed screenshots and exceed 1 MiB even for a short
-// conversation. Keep JSONL records bounded, using the same budget as IPC frames.
-const MAX_LINE: usize = MAX_FRAME;
-const MAX_ROLLOUT: u64 = 256 * 1024 * 1024;
+const MAX_SCAN_PER_POLL: usize = 4 * 1024 * 1024;
 
 #[link(name = "Kernel32")]
 unsafe extern "system" {
@@ -179,7 +177,8 @@ struct Lifecycle {
     identity: (u64, u64),
     first_line: bool,
     session_id: Option<String>,
-    partial: Vec<u8>,
+    partial: Option<LifecycleRecordParser>,
+    at_eof: bool,
     bytes: u64,
     active: Option<String>,
     terminal: BTreeMap<String, bool>,
@@ -197,7 +196,8 @@ impl Lifecycle {
             identity,
             first_line: true,
             session_id: None,
-            partial: Vec::new(),
+            partial: None,
+            at_eof: false,
             bytes: 0,
             active: None,
             terminal: BTreeMap::new(),
@@ -214,48 +214,46 @@ impl Lifecycle {
         {
             return Err(JobFailureKind::InvalidOutput);
         }
-        if self
+        let snapshot_end = self
             .file
             .metadata()
             .map_err(|_| JobFailureKind::ProcessIo)?
-            .len()
-            < self.bytes
-        {
+            .len();
+        if snapshot_end < self.bytes {
             return Err(JobFailureKind::InvalidOutput);
         }
         let mut chunk = [0u8; 65536];
-        loop {
+        let mut scanned = 0;
+        while self.bytes < snapshot_end && scanned < MAX_SCAN_PER_POLL {
+            let take = chunk.len().min(MAX_SCAN_PER_POLL - scanned)
+                .min((snapshot_end - self.bytes).min(chunk.len() as u64) as usize);
             let count = self
                 .file
-                .read(&mut chunk)
+                .read(&mut chunk[..take])
                 .map_err(|_| JobFailureKind::ProcessIo)?;
             if count == 0 {
                 break;
             }
             self.bytes += count as u64;
-            if self.bytes > MAX_ROLLOUT {
-                return Err(JobFailureKind::OutputTooLarge);
-            }
-            for &byte in &chunk[..count] {
-                if byte == b'\n' {
-                    let line = std::mem::take(&mut self.partial);
-                    if !line.is_empty() {
-                        self.observe(&line)?;
-                    }
-                } else {
-                    if self.partial.len() >= MAX_LINE {
-                        return Err(JobFailureKind::OutputTooLarge);
-                    }
-                    self.partial.push(byte);
+            scanned += count;
+            for piece in chunk[..count].split_inclusive(|byte| *byte == b'\n') {
+                let newline = piece.last() == Some(&b'\n');
+                let content = if newline { &piece[..piece.len() - 1] } else { piece };
+                if !content.is_empty() {
+                    self.partial.get_or_insert_with(LifecycleRecordParser::default)
+                        .feed(content).map_err(|_| JobFailureKind::InvalidOutput)?;
+                }
+                if newline && let Some(parser) = self.partial.take() {
+                    let value = parser.finish().map_err(|_| JobFailureKind::InvalidOutput)?;
+                    self.observe(value)?;
                 }
             }
         }
+        self.at_eof = self.bytes >= snapshot_end;
         Ok(())
     }
 
-    fn observe(&mut self, line: &[u8]) -> Result<()> {
-        let value: Value =
-            serde_json::from_slice(line).map_err(|_| JobFailureKind::InvalidOutput)?;
+    fn observe(&mut self, value: Value) -> Result<()> {
         if self.first_line {
             self.first_line = false;
             if value["type"] == "session_meta" {
@@ -294,7 +292,7 @@ impl Lifecycle {
         loop {
             check(cancel, deadline)?;
             self.poll()?;
-            if self.active.is_none() && self.partial.is_empty() {
+            if self.at_eof && self.active.is_none() && self.partial.is_none() {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(200));
@@ -583,21 +581,82 @@ mod tests {
         let path = std::env::var_os("VOXQUEUE_ROLLOUT_REPLAY").expect("rollout path required");
         let mut scan = Lifecycle::open(Path::new(&path)).unwrap();
         assert!(scan.session_id.is_some());
-        scan.poll().unwrap();
+        while !scan.at_eof { scan.poll().unwrap(); }
+        assert_eq!(scan.bytes, std::fs::metadata(&path).unwrap().len());
     }
 
     #[test]
-    fn malformed_oversized_and_truncated_rollouts_fail_closed() {
+    fn tool_record_larger_than_old_limit_is_streamed_across_polls_and_partial_writes() {
+        let (_dir, path) = fixture();
+        append(&path, json!({"type":"session_meta","payload":{"id":"thread"}}));
+        append(&path, event("task_started", "wanted"));
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        // Payload before type, plus lifecycle-looking text inside ignored output.
+        file.write_all(br#"{"payload":{"output":""#).unwrap();
+        let block = [b'x'; 65536];
+        for _ in 0..320 { file.write_all(&block).unwrap(); }
+        let mut scan = Lifecycle::open(&path).unwrap();
+        assert!(!scan.at_eof);
+        assert_eq!(scan.bytes, MAX_SCAN_PER_POLL as u64);
+        while !scan.at_eof { scan.poll().unwrap(); }
+        assert!(scan.partial.is_some());
+        assert_eq!(scan.active.as_deref(), Some("wanted"));
+        assert!(scan.terminal.is_empty());
+        file.write_all(br#"","type":"item_completed","nested":{"type":"task_complete","turn_id":"wanted"}},"type":"event_msg"}"#).unwrap();
+        file.write_all(b"\n").unwrap();
+        scan.poll().unwrap();
+        assert!(scan.partial.is_none());
+        assert_eq!(scan.active.as_deref(), Some("wanted"));
+        assert!(scan.terminal.is_empty());
+        append(&path, event("task_complete", "wanted"));
+        scan.wait_turn("wanted", &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1)).unwrap();
+    }
+
+    #[test]
+    fn projection_discards_output_and_content_but_keeps_errors() {
+        let mut parser = LifecycleRecordParser::default();
+        parser.feed(br#"{"payload":{"content":[{"type":"input_image","image_url":""#).unwrap();
+        let block = [b'x'; 65536];
+        for _ in 0..32 { parser.feed(&block).unwrap(); }
+        parser.feed(br#""}],"output":{"turn_id":"fake","type":"task_complete"},"type":"item_completed"},"type":"event_msg"}"#).unwrap();
+        let projected = parser.finish().unwrap();
+        assert!(projected["payload"]["content"].is_null());
+        assert!(projected["payload"]["output"].is_null());
+        assert!(projected["payload"]["turn_id"].is_null());
+        assert!(serde_json::to_vec(&projected).unwrap().len() < 256);
+        let (_dir, path) = fixture();
+        append(&path, json!({"type":"event_msg","payload":{"type":"task_complete",
+            "turn_id":"failed","last_agent_message":"partial answer",
+            "error":{"message":"failed"}}}));
+        let scan = Lifecycle::open(&path).unwrap();
+        assert_eq!(scan.terminal.get("failed"), Some(&false));
+        for raw in [
+            br#"{"payload":{"type":"task_complete","turn_id":"ok","error":{},"error":null,"last_agent_message":"done"},"type":"event_msg"}"#.as_slice(),
+            br#"{"payload":{"last_agent_message":"done","turn_id":"ok","type":"task_complete","error":null},"type":"event_msg"}"#.as_slice(),
+        ] {
+            let mut parser = LifecycleRecordParser::default();
+            for piece in raw.chunks(7) { parser.feed(piece).unwrap(); }
+            let projected = parser.finish().unwrap();
+            assert!(projected["payload"]["error"].is_null());
+            assert_eq!(projected["payload"]["last_agent_message"], "done");
+        }
+        let mut parser = LifecycleRecordParser::default();
+        assert!(parser.feed(br#"{"payload":{"output":"bad\q"}}"#).is_err());
+    }
+
+    #[test]
+    fn malformed_and_truncated_rollouts_fail_closed() {
         let (_dir, path) = fixture();
         std::fs::write(&path, b"not json\n").unwrap();
         assert!(matches!(
             Lifecycle::open(&path),
             Err(JobFailureKind::InvalidOutput)
         ));
-        std::fs::write(&path, vec![b'x'; MAX_LINE + 1]).unwrap();
+        std::fs::write(&path, vec![b'x'; 1024 * 1024 + 1]).unwrap();
         assert!(matches!(
             Lifecycle::open(&path),
-            Err(JobFailureKind::OutputTooLarge)
+            Err(JobFailureKind::InvalidOutput)
         ));
         std::fs::write(&path, b"{}\n").unwrap();
         let mut scan = Lifecycle::open(&path).unwrap();

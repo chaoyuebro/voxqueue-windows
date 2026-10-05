@@ -1195,6 +1195,8 @@ struct StreamedRecord {
     status: Option<String>,
     call_id: Option<String>,
     last_agent_message: Option<String>,
+    session_id: Option<String>,
+    error_present: bool,
     parts: Vec<StreamedPart>,
 }
 
@@ -1216,6 +1218,8 @@ impl StreamedRecord {
         self.status = None;
         self.call_id = None;
         self.last_agent_message = None;
+        self.session_id = None;
+        self.error_present = false;
         self.parts.clear();
     }
 
@@ -1233,10 +1237,14 @@ impl StreamedRecord {
             ("status", self.status),
             ("call_id", self.call_id),
             ("last_agent_message", self.last_agent_message),
+            ("id", self.session_id),
         ] {
             if let Some(value) = value {
                 payload.insert(key.into(), value.into());
             }
+        }
+        if self.error_present {
+            payload.insert("error".into(), true.into());
         }
         if let Some(turn_id) = self.metadata_turn_id {
             payload.insert("metadata".into(), serde_json::json!({"turn_id": turn_id}));
@@ -1324,6 +1332,7 @@ enum FieldTarget {
     Status,
     CallId,
     LastAgentMessage,
+    SessionId,
     PartType(usize),
     PartText(usize),
     Ignore,
@@ -1600,6 +1609,29 @@ struct StreamingRecordParser {
     lex: Option<JsonLex>,
     record: StreamedRecord,
     complete: bool,
+    lifecycle_only: bool,
+}
+
+/// Bounded JSON projection for desktop delivery. Tool outputs and image data are
+/// validated as JSON but never captured; only lifecycle fields are retained.
+pub struct LifecycleRecordParser(StreamingRecordParser);
+
+impl Default for LifecycleRecordParser {
+    fn default() -> Self {
+        let mut parser = StreamingRecordParser::new();
+        parser.lifecycle_only = true;
+        Self(parser)
+    }
+}
+
+impl LifecycleRecordParser {
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<(), ObserverError> {
+        self.0.feed(bytes)
+    }
+
+    pub fn finish(self) -> Result<serde_json::Value, ObserverError> {
+        self.0.finish()
+    }
 }
 
 impl StreamingRecordParser {
@@ -1609,6 +1641,7 @@ impl StreamingRecordParser {
             lex: None,
             record: StreamedRecord::default(),
             complete: false,
+            lifecycle_only: false,
         }
     }
 
@@ -1737,6 +1770,12 @@ impl StreamingRecordParser {
             return Ok(());
         }
         self.prepare_field_value();
+        if self.lifecycle_only && matches!(self.stack.last(),
+            Some(JsonFrame::Object { context: JsonContext::Payload, key: Some(key), .. })
+            if key == "error") {
+            // The complete value is still validated. Only null means no error.
+            self.record.error_present = byte != b'n';
+        }
         let target = self.field_target();
         match byte {
             b'"' => {
@@ -1789,6 +1828,7 @@ impl StreamingRecordParser {
             (JsonContext::Payload, Some("last_agent_message")) => {
                 self.record.last_agent_message = None;
             }
+            (JsonContext::Payload, Some("id")) => self.record.session_id = None,
             (JsonContext::Payload, Some("content")) => self.record.parts.clear(),
             (JsonContext::Payload, Some("metadata")) => self.record.metadata_turn_id = None,
             (JsonContext::Payload, Some("internal_chat_message_metadata_passthrough")) => {
@@ -1823,7 +1863,7 @@ impl StreamingRecordParser {
                 self.record.payload_object = true;
                 JsonContext::Payload
             }
-            (JsonContext::Payload, Some("content"), b'[') => JsonContext::ContentArray,
+            (JsonContext::Payload, Some("content"), b'[') if !self.lifecycle_only => JsonContext::ContentArray,
             (JsonContext::Payload, Some("metadata"), b'{') => JsonContext::Metadata,
             (JsonContext::Payload, Some("internal_chat_message_metadata_passthrough"), b'{') => {
                 JsonContext::InternalMetadata
@@ -1843,6 +1883,16 @@ impl StreamingRecordParser {
         let Some(JsonFrame::Object { context, key, .. }) = self.stack.last() else {
             return FieldTarget::Ignore;
         };
+        if self.lifecycle_only {
+            return match (*context, key.as_deref()) {
+                (JsonContext::Root, Some("type")) => FieldTarget::TopType,
+                (JsonContext::Payload, Some("type")) => FieldTarget::PayloadType,
+                (JsonContext::Payload, Some("turn_id")) => FieldTarget::TurnId,
+                (JsonContext::Payload, Some("id")) => FieldTarget::SessionId,
+                (JsonContext::Payload, Some("last_agent_message")) => FieldTarget::LastAgentMessage,
+                _ => FieldTarget::Ignore,
+            };
+        }
         match (*context, key.as_deref()) {
             (JsonContext::Root, Some("type")) => FieldTarget::TopType,
             (JsonContext::Payload, Some("type")) => FieldTarget::PayloadType,
@@ -1889,6 +1939,7 @@ impl StreamingRecordParser {
             FieldTarget::Status => self.record.status = Some(value),
             FieldTarget::CallId => self.record.call_id = Some(value),
             FieldTarget::LastAgentMessage => self.record.last_agent_message = Some(value),
+            FieldTarget::SessionId => self.record.session_id = Some(value),
             FieldTarget::PartType(index) => {
                 if let Some(part) = self.record.parts.get_mut(index) {
                     part.kind = Some(value);
