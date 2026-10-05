@@ -30,6 +30,7 @@
         <aside class="sidebar" aria-label="设备状态">
           <p class="side-heading">工作台</p>
           <a class="side-link active" href="#keyboard-overview" data-page="overview">▦ <span>键盘总览</span></a>
+          <a class="side-link" href="#answer-settings-panel" data-page="answer-settings">♫ <span>播报设置</span></a>
           <a class="side-link" href="#firmware-panel" data-page="firmware">⇩ <span>固件烧录</span></a>
 
           <section id="status-band" class="status-band checking" aria-live="polite">
@@ -49,19 +50,7 @@
               <div><dt>合成</dt><dd id="tts-model">--</dd></div>
               <div><dt>音色</dt><dd id="tts-voice">--</dd></div>
             </dl>
-            <form id="answer-voice-form" class="answer-voice-form">
-              <label for="answer-voice">回答音色</label>
-              <select id="answer-voice" disabled aria-label="回答音色"></select>
-              <label for="answer-speed">回答语速 <output id="answer-speed-value" for="answer-speed">1.00×</output></label>
-              <input id="answer-speed" type="range" min="0.5" max="2" step="0.05" value="1" disabled>
-              <div class="voice-speed-limits"><span>慢 0.5×</span><span>快 2.0×</span></div>
-              <label for="answer-volume">回答音量 <output id="answer-volume-value" for="answer-volume">100%</output></label>
-              <input id="answer-volume" type="range" min="0" max="100" step="5" value="100" disabled>
-              <div class="voice-speed-limits"><span>静音 0%</span><span>原音量 100%</span></div>
-              <button id="answer-voice-save" type="submit" disabled>保存播报设置</button>
-              <p id="answer-voice-status" role="status">正在读取设置…</p>
-              <p class="voice-settings-hint">用于之后生成的回答；已生成的待听音频保持原声。</p>
-            </form>
+
           </section>
         </aside>
 
@@ -94,6 +83,27 @@
           <div class="overview-footer">
             <span><i class="footer-dot"></i>设备与电脑通过本地网络连接</span>
             <span id="last-updated">尚未收到状态</span>
+          </div>
+        </section>
+
+        <section id="answer-settings-panel" class="answer-settings-panel" aria-labelledby="answer-settings-title" hidden>
+          <p class="eyebrow">VOXQUEUE · VOICE</p>
+          <h1 id="answer-settings-title">播报设置</h1>
+          <p class="firmware-intro">选择回答的音色、语速与音量，保存后重启仍会保留。</p>
+          <div class="answer-settings-card">
+            <form id="answer-voice-form" class="answer-voice-form">
+              <label for="answer-voice">回答音色</label>
+              <select id="answer-voice" disabled aria-label="回答音色"></select>
+              <label for="answer-speed">回答语速 <output id="answer-speed-value" for="answer-speed">1.00×</output></label>
+              <input id="answer-speed" type="range" min="0.5" max="2" step="0.05" value="1" disabled>
+              <div class="voice-speed-limits"><span>慢 0.5×</span><span>快 2.0×</span></div>
+              <label for="answer-volume">回答音量 <output id="answer-volume-value" for="answer-volume">100%</output></label>
+              <input id="answer-volume" type="range" min="0" max="100" step="5" value="100" disabled>
+              <div class="voice-speed-limits"><span>静音 0%</span><span>原音量 100%</span></div>
+              <button id="answer-voice-save" type="submit" disabled>保存播报设置</button>
+              <p id="answer-voice-status" role="status">正在读取设置…</p>
+              <p class="voice-settings-hint">用于之后生成的回答；已生成的待听音频保持原声。</p>
+            </form>
           </div>
         </section>
 

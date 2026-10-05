@@ -383,8 +383,11 @@ let flashPollPending = false;
 
 function showWorkspacePage(page) {
   const flashing = page === "firmware";
+  const settings = page === "answer-settings";
   requiredElement(".workspace").classList.toggle("firmware-page", flashing);
-  requiredElement("#keyboard-overview").hidden = flashing;
+  requiredElement(".workspace").classList.toggle("answer-settings-page", settings);
+  requiredElement("#keyboard-overview").hidden = flashing || settings;
+  requiredElement("#answer-settings-panel").hidden = !settings;
   firmwareUI.panel.hidden = !flashing;
   document.querySelectorAll("[data-page]").forEach((link) => {
     const active = link.getAttribute("data-page") === page;
@@ -392,7 +395,7 @@ function showWorkspacePage(page) {
     if (active) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   });
-  requiredElement(".top-nav-active").textContent = flashing ? "固件烧录" : "语音键盘";
+  requiredElement(".top-nav-active").textContent = flashing ? "固件烧录" : settings ? "播报设置" : "语音键盘";
 }
 for (const link of document.querySelectorAll("[data-page]")) {
   link.addEventListener("click", (event) => {
