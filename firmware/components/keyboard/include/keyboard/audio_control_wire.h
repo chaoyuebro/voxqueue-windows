@@ -37,6 +37,8 @@ enum class AudioControlAckStatus : std::uint8_t {
 struct HeartbeatFlags {
   bool streaming = false;
   bool audio_ready = false;
+  // 0..10 local speaker levels; 0xff keeps legacy reserved bytes zero.
+  std::uint8_t speaker_volume_level = 0xff;
 };
 
 struct AudioControlCommand {

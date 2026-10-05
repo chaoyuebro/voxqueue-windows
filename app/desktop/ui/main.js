@@ -140,6 +140,9 @@ function renderDashboard(snapshot) {
   elements.asrModel.textContent = snapshot.provider.asr_model;
   elements.ttsModel.textContent = snapshot.provider.tts_model;
   elements.ttsVoice.textContent = savedAnswerVoiceName || snapshot.provider.voice;
+  const keyboardVolume = snapshot.lan?.keyboard_volume_percent;
+  requiredElement("#keyboard-volume-percent").textContent = typeof keyboardVolume === "number"
+    ? `${keyboardVolume}%` : "等待上报（键盘未连接或固件需更新）";
   elements.lanDiagnostics.textContent = snapshot.lan
     ? `入站 ${snapshot.lan.udp_received} · 心跳 ${snapshot.lan.heartbeat_received}/${snapshot.lan.heartbeat_authenticated} · 信箱发送/失败 ${snapshot.lan.mailbox_sent}/${snapshot.lan.mailbox_send_failed} · 语音帧 ${snapshot.lan.audio_frames_accepted} · 结束包 ${snapshot.lan.audio_ends_accepted} · 完整录音 ${snapshot.lan.captures_ready} · 录音失败 ${snapshot.lan.captures_rejected} · 识别成功/失败 ${snapshot.lan.asr_succeeded}/${snapshot.lan.asr_failed} · 任务交付 ${snapshot.lan.prompts_delivered} · 入队/去重/拒绝 ${snapshot.lan.queue_inserted}/${snapshot.lan.queue_replayed}/${snapshot.lan.queue_rejected} · 语音认证拒绝 ${snapshot.lan.audio_auth_rejected} · 设备密钥${snapshot.lan.auth_key_loaded ? "已加载" : "缺失"}`
     : "Host 尚未提供诊断";
@@ -315,6 +318,7 @@ async function refreshDashboard() {
     return;
   }
   const unavailable = presentDashboardFailure(probe.connection);
+  requiredElement("#keyboard-volume-percent").textContent = "Host 离线";
   dashboard = null;
   for (const button of Array.from(elements.slots.querySelectorAll(".clear-queue-button"))) {
     if (button instanceof HTMLButtonElement) button.disabled = true;

@@ -55,6 +55,7 @@
  *   tasks: DashboardTask[],
  *   slots: DashboardSlot[],
  *   lan: {
+ *     keyboard_volume_percent?: number | null,
  *     secret_file_present: boolean,
  *     secret_file_readable: boolean,
  *     auth_key_loaded: boolean,

@@ -93,6 +93,7 @@ class KeyboardAudioLink {
   // state changes. Requests coalesce by generation and remain pending until
   // the control task successfully sends a heartbeat.
   void request_heartbeat_refresh();
+  void set_speaker_volume_level(std::uint8_t level);
 #if defined(EASY_INPUT_SPEAKER_DIAGNOSTIC) || \
     defined(EASY_INPUT_SPEAKER_ASSETS_PRODUCT)
   void set_audio_io_arbiter(ai_keyboard::AudioIoArbiter* arbiter);
@@ -232,6 +233,7 @@ class KeyboardAudioLink {
   bool wifi_reconnect_requested_ = false;
   TickType_t wifi_reconnect_requested_tick_ = 0;
   std::uint32_t control_heartbeat_request_generation_ = 0;
+  std::uint8_t speaker_volume_level_ = 0xff;
   ActivityCallback activity_callback_ = nullptr;
   void* activity_callback_context_ = nullptr;
   HeartbeatExtensionCallback heartbeat_extension_callback_ = nullptr;

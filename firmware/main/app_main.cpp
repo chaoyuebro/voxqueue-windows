@@ -1998,6 +1998,7 @@ void dispatch_encoder_rotation(AppContext* app, const easy_input::InputEvent& ev
   }
   app->speaker_volume_level = adjusted;
   app->speaker.set_volume_level(adjusted);
+  app->audio.set_speaker_volume_level(adjusted);
   app->speaker_volume_dirty = true;
   app->speaker_volume_changed_ms = now_ms;
   ESP_LOGI(kTag,
@@ -3117,6 +3118,7 @@ extern "C" void app_main(void) {
     }
   }
   app.speaker.set_volume_level(app.speaker_volume_level);
+  app.audio.set_speaker_volume_level(app.speaker_volume_level);
   ESP_LOGI(kTag,
            "speaker volume loaded level=%u percent=%u",
            static_cast<unsigned>(app.speaker_volume_level),

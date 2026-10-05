@@ -276,6 +276,7 @@ struct LanVoiceDiagnostics {
     audio_auth_rejected: AtomicU64,
     heartbeat_received: AtomicU64,
     heartbeat_authenticated: AtomicU64,
+    keyboard_volume: Mutex<Option<(u8, Instant)>>,
     mailbox_sent: AtomicU64,
     mailbox_send_failed: AtomicU64,
     playback_received: AtomicU64,
@@ -304,6 +305,8 @@ pub struct LanVoiceDiagnosticsSnapshot {
     pub audio_auth_rejected: u64,
     pub heartbeat_received: u64,
     pub heartbeat_authenticated: u64,
+    #[serde(default)]
+    pub keyboard_volume_percent: Option<u8>,
     pub mailbox_sent: u64,
     pub mailbox_send_failed: u64,
     pub playback_received: u64,
@@ -419,7 +422,10 @@ impl LanVoiceIngress {
                                 if let Some(key) = assembler.auth_key.as_ref() {
                                     match playback.handle_heartbeat(packet, source, key, &socket) {
                                         HeartbeatResponse::Invalid => {}
-                                        HeartbeatResponse::SendFailed => {
+                                        HeartbeatResponse::SendFailed(volume) => {
+                                            if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
+                                                *reading = volume.map(|level| (level * 10, Instant::now()));
+                                            }
                                             ingress_diagnostics
                                                 .heartbeat_authenticated
                                                 .fetch_add(1, Ordering::Relaxed);
@@ -427,7 +433,10 @@ impl LanVoiceIngress {
                                                 .mailbox_send_failed
                                                 .fetch_add(1, Ordering::Relaxed);
                                         }
-                                        HeartbeatResponse::Sent => {
+                                        HeartbeatResponse::Sent(volume) => {
+                                            if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
+                                                *reading = volume.map(|level| (level * 10, Instant::now()));
+                                            }
                                             ingress_diagnostics
                                                 .heartbeat_authenticated
                                                 .fetch_add(1, Ordering::Relaxed);
@@ -567,6 +576,10 @@ impl LanVoiceIngress {
                 .diagnostics
                 .heartbeat_authenticated
                 .load(Ordering::Relaxed),
+            keyboard_volume_percent: self.diagnostics.keyboard_volume.lock().ok()
+                .and_then(|reading| *reading)
+                .filter(|(_, received)| received.elapsed() < Duration::from_secs(12))
+                .map(|(percent, _)| percent),
             mailbox_sent: self.diagnostics.mailbox_sent.load(Ordering::Relaxed),
             mailbox_send_failed: self.diagnostics.mailbox_send_failed.load(Ordering::Relaxed),
             playback_received: self.diagnostics.playback_received.load(Ordering::Relaxed),
@@ -736,8 +749,8 @@ struct RetiredPlaybackFinish {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeartbeatResponse {
     Invalid,
-    SendFailed,
-    Sent,
+    SendFailed(Option<u8>),
+    Sent(Option<u8>),
 }
 
 #[derive(Default)]
@@ -836,7 +849,7 @@ impl ActiveLanPlayback {
             || packet[..4] != *b"EIHB"
             || packet[4] != 1
             || packet[5] & !0x03 != 0
-            || packet[6..8] != [0, 0]
+            || !(packet[6..8] == [0, 0] || (packet[7] == 1 && packet[6] <= 10))
             || packet[20..24] != *b"EISD"
             || packet[24] != 1
             || packet[25] != 60
@@ -866,8 +879,8 @@ impl ActiveLanPlayback {
         };
         debug_assert_eq!(response.len(), MAILBOX_STATUS_BYTES);
         match socket.send_to(&response, source) {
-            Ok(length) if length == response.len() => HeartbeatResponse::Sent,
-            _ => HeartbeatResponse::SendFailed,
+            Ok(length) if length == response.len() => HeartbeatResponse::Sent((packet[7] == 1).then_some(packet[6])),
+            _ => HeartbeatResponse::SendFailed((packet[7] == 1).then_some(packet[6])),
         }
     }
 

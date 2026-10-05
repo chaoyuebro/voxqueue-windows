@@ -308,6 +308,9 @@ kbd {
 .answer-settings-card .answer-voice-form select { padding: 10px; font-size: 14px; }
 .answer-settings-card .answer-voice-form button { justify-self: start; padding: 10px 20px; font-size: 14px; }
 .answer-settings-card .answer-voice-form p { font-size: 12px; }
+.keyboard-volume-status { margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid #e8ded5; font-size: 14px; }
+.keyboard-volume-status p { margin: 8px 0 0; color: #887565; font-size: 12px; }
+#keyboard-volume-percent { color: #bd5b3c; }
 .firmware-panel { grid-column: 2 / -1; padding: 36px; }
 .firmware-panel h1 { margin: 14px 0 10px; font-size: 30px; }
 .firmware-intro { color: #887565; line-height: 1.7; }

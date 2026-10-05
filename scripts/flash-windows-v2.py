@@ -19,9 +19,9 @@ from serial.tools import list_ports
 ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE = ROOT / "firmware"
 IMAGES = (
-    ("0x0", FIRMWARE / "build/bootloader/bootloader.bin", "be3abea605a6be7f04c2d0f4011bd90688f799a834a164cdc6a29b16c3324287"),
-    ("0x8000", FIRMWARE / "build/partition_table/partition-table.bin", "7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278"),
-    ("0x10000", FIRMWARE / "build/easy_codex_input.bin", "d7670a545bd35461e0fd6cf3f04d24a4ec1f3ffae64f54924ee3a5a18a7a1cc0"),
+    ("0x0", FIRMWARE / "releases/bootloader-20261005.bin", "be3abea605a6be7f04c2d0f4011bd90688f799a834a164cdc6a29b16c3324287"),
+    ("0x8000", FIRMWARE / "releases/partition-table-20261005.bin", "7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278"),
+    ("0x10000", FIRMWARE / "releases/keyboard-volume-20261006.bin", "93d93d9e9177841ba7a91c4a52517587370cf5a272dc2ce274076b203fe85ed7"),
 )
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)

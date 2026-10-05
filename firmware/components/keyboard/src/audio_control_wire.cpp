@@ -55,6 +55,10 @@ std::size_t encode_heartbeat(std::uint8_t* buffer,
   buffer[5] = flag_bits;
   buffer[6] = 0;
   buffer[7] = 0;
+  if (flags.speaker_volume_level <= 10) {
+    buffer[6] = flags.speaker_volume_level;
+    buffer[7] = 1;  // speaker volume extension version
+  }
   write_le64(buffer + 8, session_id);
   write_le32(buffer + 16, sequence);
   return kHeartbeatPacketBytes;

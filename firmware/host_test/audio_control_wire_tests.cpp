@@ -97,6 +97,13 @@ void ack_encodes_action_status_session_and_sequence() {
 }
 
 int main() {
+  for (std::uint8_t level = 0; level <= 10; ++level) {
+    std::array<std::uint8_t, ai_keyboard::kHeartbeatPacketBytes> packet{};
+    HeartbeatFlags flags{};
+    flags.speaker_volume_level = level;
+    ai_keyboard::encode_heartbeat(packet.data(), flags, 0, 7);
+    assert(packet[6] == level && packet[7] == 1);
+  }
   heartbeat_encodes_magic_flags_session_and_sequence();
   heartbeat_idle_flags_are_zero();
   control_roundtrip_via_manual_encoding();

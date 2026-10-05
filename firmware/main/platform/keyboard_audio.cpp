@@ -599,6 +599,14 @@ void KeyboardAudioLink::request_heartbeat_refresh() {
   }
 }
 
+void KeyboardAudioLink::set_speaker_volume_level(std::uint8_t level) {
+  if (level > 10) return;
+  lock();
+  speaker_volume_level_ = level;
+  unlock();
+  request_heartbeat_refresh();
+}
+
 #if defined(EASY_INPUT_SPEAKER_DIAGNOSTIC) || \
     defined(EASY_INPUT_SPEAKER_ASSETS_PRODUCT)
 void KeyboardAudioLink::set_audio_io_arbiter(
@@ -1162,6 +1170,7 @@ void KeyboardAudioLink::run_control_channel() {
       lock();
       flags.streaming = session_lifecycle_.active() &&
                         session_lifecycle_.phase() != ai_keyboard::AudioSessionPhase::Stopping;
+      flags.speaker_volume_level = speaker_volume_level_;
       unlock();
       flags.audio_ready = true;
       std::size_t heartbeat_length =

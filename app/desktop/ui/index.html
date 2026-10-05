@@ -91,6 +91,10 @@
           <h1 id="answer-settings-title">播报设置</h1>
           <p class="firmware-intro">选择回答的音色、语速与音量，保存后重启仍会保留。</p>
           <div class="answer-settings-card">
+            <div class="keyboard-volume-status" aria-live="polite">
+              <strong>键盘扬声器音量：<span id="keyboard-volume-percent">等待上报</span></strong>
+              <p>顺时针增大、逆时针减小；旋钮调整后自动更新。</p>
+            </div>
             <form id="answer-voice-form" class="answer-voice-form">
               <label for="answer-voice">回答音色</label>
               <select id="answer-voice" disabled aria-label="回答音色"></select>
