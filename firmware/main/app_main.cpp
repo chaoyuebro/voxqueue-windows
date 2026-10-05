@@ -2778,15 +2778,17 @@ void apply_pending_mailbox_status(AppContext* app, std::uint32_t now_ms) {
     return;
   }
   app->leds.set_mailbox_status(
-      status.unread_slots, status.coverage_by_slot, status.running_tasks, now_ms);
+      status.unread_slots, status.coverage_by_slot, status.running_tasks,
+      status.desktop_running, now_ms);
   ESP_LOGI(kTag,
-           "mailbox status slots=0x%02x coverage=%u/%u/%u/%u running=%u heartbeat=%lu",
+           "mailbox status slots=0x%02x coverage=%u/%u/%u/%u running=%u desktop=%u heartbeat=%lu",
            static_cast<unsigned>(status.unread_slots),
            static_cast<unsigned>(status.coverage_by_slot[0]),
            static_cast<unsigned>(status.coverage_by_slot[1]),
            static_cast<unsigned>(status.coverage_by_slot[2]),
            static_cast<unsigned>(status.coverage_by_slot[3]),
            static_cast<unsigned>(status.running_tasks),
+           static_cast<unsigned>(status.desktop_running),
            static_cast<unsigned long>(status.heartbeat_sequence));
 }
 

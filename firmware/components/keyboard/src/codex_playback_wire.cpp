@@ -391,13 +391,15 @@ bool decode_mailbox_status(const std::uint8_t* packet,
                            const std::array<std::uint8_t, 32>& key,
                            MailboxWireStatus* status) {
   if (status == nullptr || packet_size != kMailboxStatusBytes ||
-      !magic_matches(packet, "EIMB") || packet[4U] != kMailboxStatusVersion ||
+      !magic_matches(packet, "EIMB") ||
+      (packet[4U] != 3U && packet[4U] != kMailboxStatusVersion) ||
       !authenticate(packet, packet_size, key) ||
-      packet[7U] != 0U) {
+      (packet[4U] == 3U && packet[7U] != 0U) || packet[7U] > 1U) {
     return false;
   }
   status->unread_slots = packet[5U];
   status->running_tasks = packet[6U];
+  status->desktop_running = packet[4U] == 3U || packet[7U] == 1U;
   status->heartbeat_sequence = get_u32(packet, 8U);
   std::copy_n(packet + 12U, status->coverage_by_slot.size(),
               status->coverage_by_slot.begin());

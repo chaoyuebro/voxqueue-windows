@@ -8,6 +8,7 @@ VoxQueue 是基于 EasyInput V2 的 Windows 四槽语音任务键盘。本仓库
 - 已通过独立 Python 原型验证向 Codex 桌面聊天投递文字、接收回复及观察完成事件。原型曾因缺少 `text_elements` 导致页面异常，字段已修正；现已通过 S1 实体语音 → 桌面回复 → S5 总结播报及熄灯验收。
 - Windows 槽位执行器现已接入原生 Rust 桌面 IPC，保留四槽调度、同聊天 FIFO 和完成监听。投递记录持久化，回执不确定时停止重发。四槽绑定同一真实桌面聊天的任务、回复和完成账本已通过；四聊天并行及本次实体键盘验收见 [桌面接入验证](docs/desktop-integration-validation.md)。
 - Windows 任务状态和总结收集已改为直接订阅 Codex 桌面通知，不再扫描聊天历史文件；只保存输入、最终回答和必要状态，工具正文及图片丢弃。通知、真实完成和去重验证见 [桌面任务状态通知](docs/desktop-state-notifications.md)。
+- Windows 最右侧状态灯已改为随 ChatGPT 桌面软件运行状态亮灭；需要 Host 与键盘固件一起升级，编译验证及安装状态见 [桌面软件运行指示灯](docs/desktop-presence-led.md)。
 - 内部桌面接口需要随 Codex 版本复验；完整调研与限制见 [桌面端接入记录](docs/Codex桌面端语音接入调研.md)，实验脚本位于 `tools/desktop-validation/`。
 
 当前版本不代表所有平台测试或长稳测试已经通过；旧安装包需要升级才能使用桌面投递。

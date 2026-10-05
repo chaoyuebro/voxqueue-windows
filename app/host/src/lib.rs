@@ -8,6 +8,7 @@ pub mod desktop_runner;
 #[cfg(windows)]
 pub mod desktop_notifications;
 pub mod dashscope;
+pub mod desktop_presence;
 pub mod health;
 pub mod lan_playback;
 pub mod lan_voice;

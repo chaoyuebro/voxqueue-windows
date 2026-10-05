@@ -19,6 +19,8 @@ foreach ($path in @($IdfPath, $python, $idf) + $toolBins) {
 }
 
 $env:IDF_PATH = $IdfPath
+# ESP-IDF subprocesses must read UTF-8 configs when the checkout path contains Chinese.
+$env:PYTHONUTF8 = '1'
 $env:IDF_TOOLS_PATH = $ToolsRoot
 $env:IDF_PYTHON_ENV_PATH = Split-Path -Parent (Split-Path -Parent $python)
 $env:ESP_ROM_ELF_DIR = Join-Path $ToolsRoot 'tools\esp-rom-elfs\20241011'

@@ -19,19 +19,21 @@ from serial.tools import list_ports
 ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE = ROOT / "firmware"
 IMAGES = (
-    ("0x0", FIRMWARE / "build/bootloader/bootloader.bin", "001ebd5cad3e5ccc7e66b13ff9076af29b510255f6580fe81379f5444bad4991"),
+    ("0x0", FIRMWARE / "build/bootloader/bootloader.bin", "be3abea605a6be7f04c2d0f4011bd90688f799a834a164cdc6a29b16c3324287"),
     ("0x8000", FIRMWARE / "build/partition_table/partition-table.bin", "7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278"),
-    ("0x10000", FIRMWARE / "build/easy_codex_input.bin", "aa1ffe4e2d5f8a10576e8273fe45b1e89f75eb91f18670e4528042115e44ce82"),
+    ("0x10000", FIRMWARE / "build/easy_codex_input.bin", "d7670a545bd35461e0fd6cf3f04d24a4ec1f3ffae64f54924ee3a5a18a7a1cc0"),
 )
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--identify", action="store_true", help="Only report the transient ESP32-S3 USB serial; never flash")
     mode.add_argument("--serial", help="ESP32-S3 USB serial confirmed for the board being flashed")
+    parser.add_argument("--application-only", action="store_true", help="Update only the application at 0x10000; preserve bootloader, partition table and NVS")
     args = parser.parse_args()
     expected_serial = args.serial.upper() if args.serial else None
+    images = IMAGES[2:] if args.application_only else IMAGES
     if not args.identify:
-        for _, path, expected in IMAGES:
+        for _, path, expected in images:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if digest != expected:
                 raise RuntimeError(f"Image SHA-256 changed: {path.name}")
@@ -60,7 +62,7 @@ def main() -> int:
                 "--connect-attempts", "0", "write_flash", "--flash_mode", "dio",
                 "--flash_freq", "80m", "--flash_size", "16MB",
             ]
-            for offset, path, _ in IMAGES:
+            for offset, path, _ in images:
                 command.extend((offset, str(path)))
             return subprocess.run(command, cwd=FIRMWARE, check=False).returncode
         time.sleep(0.05)

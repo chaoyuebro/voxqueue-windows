@@ -16,7 +16,7 @@ const FINISHED_BYTES: usize = 56;
 const FINISHED_ACK_BYTES: usize = 48;
 const DATA_HEADER_BYTES: usize = 40;
 pub const MAILBOX_STATUS_BYTES: usize = 32;
-pub const MAILBOX_STATUS_VERSION: u8 = 3;
+pub const MAILBOX_STATUS_VERSION: u8 = 4;
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackWireError {
@@ -69,6 +69,7 @@ pub struct PlaybackFinished {
 pub struct MailboxStatus {
     pub unread_slots: u8,
     pub running_tasks: u8,
+    pub desktop_running: bool,
     pub coverage_by_slot: [u8; 4],
 }
 
@@ -302,6 +303,7 @@ pub fn encode_mailbox_status(
     packet[4] = MAILBOX_STATUS_VERSION;
     packet[5] = status.unread_slots;
     packet[6] = status.running_tasks;
+    packet[7] = u8::from(status.desktop_running);
     put_u32(&mut packet, 8, heartbeat_sequence);
     packet[12..16].copy_from_slice(&status.coverage_by_slot);
     sign(&mut packet, key);
@@ -314,7 +316,7 @@ pub fn decode_mailbox_status(
 ) -> Result<(MailboxStatus, u32), PlaybackWireError> {
     if packet.len() != MAILBOX_STATUS_BYTES
         || packet[..4] != *b"EIMB"
-        || packet[4] != MAILBOX_STATUS_VERSION
+        || !matches!(packet[4], 3 | MAILBOX_STATUS_VERSION)
     {
         return Err(PlaybackWireError::Malformed);
     }
@@ -322,9 +324,10 @@ pub fn decode_mailbox_status(
     let status = MailboxStatus {
         unread_slots: packet[5],
         running_tasks: packet[6],
+        desktop_running: packet[4] == 3 || packet[7] == 1,
         coverage_by_slot: packet[12..16].try_into().unwrap(),
     };
-    if packet[7] != 0 || !valid_mailbox_status(status) {
+    if (packet[4] == 3 && packet[7] != 0) || packet[7] > 1 || !valid_mailbox_status(status) {
         return Err(PlaybackWireError::Malformed);
     }
     Ok((status, get_u32(packet, 8)))
@@ -519,6 +522,7 @@ mod tests {
         let mailbox = MailboxStatus {
             unread_slots: 0b0101,
             running_tasks: 3,
+            desktop_running: true,
             coverage_by_slot: [7, 0, 2, 0],
         };
         let mailbox_packet = encode_mailbox_status(mailbox, 0x1122_3344, &key).unwrap();
@@ -531,6 +535,7 @@ mod tests {
                 MailboxStatus {
                     unread_slots: 0,
                     running_tasks: 0,
+                    desktop_running: true,
                     coverage_by_slot: [1, 0, 0, 0],
                 },
                 1,
@@ -543,6 +548,7 @@ mod tests {
                 MailboxStatus {
                     unread_slots: 0,
                     running_tasks: 5,
+                    desktop_running: true,
                     coverage_by_slot: [0; 4],
                 },
                 1,
@@ -631,13 +637,14 @@ mod tests {
                 MailboxStatus {
                     unread_slots: 0b0101,
                     running_tasks: 3,
+                    desktop_running: true,
                     coverage_by_slot: [7, 0, 2, 0],
                 },
                 0x1122_3344,
                 &key,
             )
             .unwrap()),
-            "45494d42030503004433221107000200ee287f10dfdcd199727c2a2bda61e9ec"
+            "45494d420405030144332211070002002e57927726d4b52f9c90f5eb6ff1d158"
         );
     }
 

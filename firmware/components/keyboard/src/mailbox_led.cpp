@@ -31,10 +31,11 @@ ai_keyboard::FeedbackColor task_activity_color(std::uint8_t running_tasks) {
 
 std::array<ai_keyboard::FeedbackColor, 5> mailbox_frame_for_slots(
     const std::array<std::uint8_t, 4>& coverage_by_slot,
-    std::uint8_t running_tasks) {
+    std::uint8_t running_tasks, bool desktop_running) {
   std::array<ai_keyboard::FeedbackColor, 5> frame{};
   // D1/frame 0 is the physical rightmost LED; D5/frame 4 is leftmost.
-  frame[0U] = task_activity_color(running_tasks);
+  frame[0U] = desktop_running ? task_activity_color(running_tasks)
+                              : ai_keyboard::FeedbackColor{};
   for (std::size_t index = 0U; index < coverage_by_slot.size(); ++index) {
     frame[4U - index] = mailbox_color_for_coverage(coverage_by_slot[index]);
   }

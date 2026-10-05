@@ -168,6 +168,8 @@ void StatusLedStrip::clear() {
   mailbox_unread_slots_ = 0U;
   mailbox_coverage_by_slot_ = {};
   running_tasks_ = 0U;
+  desktop_running_ = false;
+  desktop_presence_expires_ms_ = 0U;
   mailbox_status_active_ = false;
   set_all({});
   esp_err_t err = ESP_OK;
@@ -219,6 +221,7 @@ void StatusLedStrip::set_agent_status(const ai_keyboard::AgentStatusCommand& com
 void StatusLedStrip::set_mailbox_status(std::uint8_t unread_slots,
                                         const std::array<std::uint8_t, 4>& coverage_by_slot,
                                         std::uint8_t running_tasks,
+                                        bool desktop_running,
                                         std::uint32_t now_ms) {
   bool valid = (unread_slots & 0xF0U) == 0U && running_tasks <= 4U;
   for (std::size_t index = 0U; index < coverage_by_slot.size(); ++index) {
@@ -229,6 +232,10 @@ void StatusLedStrip::set_mailbox_status(std::uint8_t unread_slots,
   mailbox_coverage_by_slot_ = valid ? coverage_by_slot
                                     : std::array<std::uint8_t, 4>{};
   running_tasks_ = valid ? running_tasks : 0U;
+  desktop_running_ = valid && desktop_running;
+  // A lost Host must not leave a stale application-running indicator lit.
+  // Idle keyboard heartbeats arrive every 4 seconds; allow two missed replies.
+  desktop_presence_expires_ms_ = now_ms + 10000U;
   mailbox_status_active_ = valid;
   idle_rendered_ = false;
   if (!active_feedback_.active) {
@@ -343,6 +350,10 @@ void StatusLedStrip::show_feedback(const ai_keyboard::InputActivityFeedback& fee
 }
 
 void StatusLedStrip::update(std::uint32_t now_ms) {
+  if (desktop_running_ && !deadline_pending(now_ms, desktop_presence_expires_ms_)) {
+    desktop_running_ = false;
+    idle_rendered_ = false;
+  }
   if (agent_status_active_ && !agent_status_valid(now_ms)) {
     agent_status_active_ = false;
     agent_status_rendered_ = false;
@@ -393,7 +404,7 @@ void StatusLedStrip::render_background_status(std::uint32_t now_ms) {
 
 void StatusLedStrip::render_mailbox_status() {
   const auto frame = easy_codex::mailbox_frame_for_slots(
-      mailbox_coverage_by_slot_, running_tasks_);
+      mailbox_coverage_by_slot_, running_tasks_, desktop_running_);
   for (std::size_t index = 0U; index < leds_.size(); ++index) {
     leds_[index] = to_rgb(frame[index]);
   }

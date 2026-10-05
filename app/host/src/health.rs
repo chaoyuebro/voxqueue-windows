@@ -380,6 +380,7 @@ impl HostDaemon {
                 let current = MailboxStatus {
                     unread_slots: snapshot.unread_slots,
                     running_tasks: running_tasks.load(Ordering::Acquire),
+                    desktop_running: crate::desktop_presence::is_running(),
                     coverage_by_slot: snapshot.coverage_by_slot,
                 };
                 if last_mailbox_status != Some(current) {
