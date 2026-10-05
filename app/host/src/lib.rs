@@ -33,6 +33,7 @@ pub mod summary_orchestrator;
 #[cfg(any(target_os = "macos", windows))]
 pub mod summary_worker;
 pub mod tts_cache;
+pub mod voice_settings;
 #[cfg(windows)]
 pub mod windows_credential;
 #[cfg(windows)]

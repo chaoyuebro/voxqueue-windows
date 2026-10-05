@@ -1,0 +1,22 @@
+# 回答音色与语速设置
+
+日期：2026-10-06。
+
+VoxQueue 左侧“语音服务”区域提供回答音色下拉框、0.5–2.0 倍语速滑块（步长 0.05）及“保存播报设置”按钮。八种普通话音色包括默认抒情男声、温润男声、播报男声、电台男主播、新闻女声、甜美女声、温暖闺蜜和温柔学姐。
+
+音色 ID 按 [MiniMax 官方系统音色表](https://platform.minimax.cn/docs/faq/system-voice-id) 核对。参数发送到 [MiniMax 同步语音合成接口](https://platform.minimax.cn/docs/api-reference/speech-t2a-http) 的 `voice_setting.voice_id` 与 `voice_setting.speed`；模型仍为 speech-2.8-hd。
+
+设置原子保存于现有 EasyCodexInput 数据目录的 `voice-settings.json`，重启后保留，不包含 API 密钥。桌面命令与 Host 使用同一数据根目录。Host 在每次处理新的总结任务时重新读取设置，不需重启；同一次合成使用固定设置快照。摘要编排校验选中音色对应的音频收据，避免旧的固定音色校验拒绝新音色。
+
+此功能影响之后生成的回答播报。已经生成、已经缓存的待听音频保持原来的音色和语速，不自动重新合成或收费。保存设置不会修改槽位、任务或键盘固件。
+
+## 验证
+
+- Windows 定向测试：三项设置测试和两项 MiniMax 音频协议测试通过。覆盖八种音色、语速边界、重读保存数据、无效参数不覆盖旧设置及合成请求中的实际参数。
+- 使用本机已有凭据进行真实合成，温润男声同一句话在 0.75 倍速时为 7395 ms，1.5 倍速时为 3831 ms；新闻女声 1.0 倍速为 6222 ms。三份音频均通过键盘 EIAD 编码。
+- JavaScript 语法检查、Git diff 检查和 Windows NSIS 构建通过。
+- 原有整个 Rust 单元测试集含 Unix 专用测试，在 Windows 上不能编译；上述验证使用生产库和 Windows 可运行的定向集成测试。
+- 本机已备份并更新桌面程序和 Host，逐份 SHA-256 与构建输出核对一致，重新启动后检查 Host 状态。界面实测由用户提供反馈，不调用 computer-use。
+- 用户确认新版界面能看到音色、语速和保存按钮，并且保存成功。更新后的 Host health 返回 ready。
+
+本次 NSIS SHA-256：`0f226a8b4508985af80e444fd685ab2bb29bbf332e44a2c3da3b82726e8a2374`。

@@ -40,6 +40,7 @@ impl SummaryGenerator for SparkRunner {
 }
 
 pub trait SummarySynthesizer {
+    fn voice(&self) -> &str { SUMMARY_TTS_VOICE }
     fn synthesize(&self, text: &str, voice: &str, instructions: &str)
     -> Result<TtsAudio, TtsError>;
 }
@@ -73,10 +74,12 @@ impl<S: SecretStore> SummarySynthesizer for DashScopeSummarySynthesizer<'_, S> {
 pub struct MiniMaxSummarySynthesizer<'a> {
     pub client: &'a MiniMaxVoiceClient,
     pub key: &'a [u8],
+    pub settings: crate::voice_settings::VoiceSettings,
 }
 
 #[cfg(windows)]
 impl SummarySynthesizer for MiniMaxSummarySynthesizer<'_> {
+    fn voice(&self) -> &str { &self.settings.voice }
     fn synthesize(
         &self,
         text: &str,
@@ -84,7 +87,7 @@ impl SummarySynthesizer for MiniMaxSummarySynthesizer<'_> {
         _instructions: &str,
     ) -> Result<TtsAudio, TtsError> {
         self.client
-            .synthesize(self.key, text)
+            .synthesize_with_settings(self.key, text, &self.settings)
             .map_err(|error| match error {
                 MiniMaxVoiceError::Rejected => TtsError::Rejected,
                 MiniMaxVoiceError::RateLimited => TtsError::RateLimited,
@@ -280,7 +283,7 @@ where
         );
         let tts = match self.synthesizer.synthesize(
             &summary.spoken_text,
-            SUMMARY_TTS_VOICE,
+            self.synthesizer.voice(),
             SUMMARY_TTS_INSTRUCTIONS,
         ) {
             Ok(tts) => tts,
@@ -297,7 +300,7 @@ where
                 return Err(error.into());
             }
         };
-        if tts.receipt().voice != SUMMARY_TTS_VOICE {
+        if tts.receipt().voice != self.synthesizer.voice() {
             self.abandon(&claim)?;
             eprintln!(
                 "summary=abandoned_unpublished_tts_attempt state=voice_mismatch generation={}",

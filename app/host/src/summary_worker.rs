@@ -55,6 +55,8 @@ pub fn run(
 }
 
 struct Runtime {
+    #[cfg(windows)]
+    settings_root: std::path::PathBuf,
     cache: Arc<CacheStore>,
     spark: SparkRunner,
     #[cfg(unix)]
@@ -80,6 +82,7 @@ impl Runtime {
                 .map_err(|error| error.to_string())?
                 .ok_or("MiniMax credential is missing")?;
             return Ok(Self {
+                settings_root: paths.root.clone(),
                 cache,
                 spark: SparkRunner::new(SparkRunnerConfig::default()),
                 tts_client: MiniMaxVoiceClient::new().map_err(|error| error.to_string())?,
@@ -164,9 +167,19 @@ fn run_ready(
                 accounts: &runtime.accounts,
             };
             #[cfg(windows)]
+            let settings = match crate::voice_settings::VoiceSettings::load(&runtime.settings_root) {
+                Ok(settings) => settings,
+                Err(_) => {
+                    retry_after.insert(task_id, Instant::now() + FAILURE_BACKOFF);
+                    eprintln!("summary_worker=voice_settings_invalid");
+                    continue;
+                }
+            };
+            #[cfg(windows)]
             let tts = MiniMaxSummarySynthesizer {
                 client: &runtime.tts_client,
                 key: &runtime.minimax_key,
+                settings,
             };
             let request_id = format!("auto-{}", uuid::Uuid::new_v4());
             let result = {

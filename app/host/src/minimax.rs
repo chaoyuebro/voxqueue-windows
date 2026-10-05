@@ -79,18 +79,15 @@ impl VoiceClient {
     }
 
     pub fn synthesize(&self, key: &[u8], text: &str) -> Result<TtsAudio, VoiceError> {
+        self.synthesize_with_settings(key, text, &crate::voice_settings::VoiceSettings::default())
+    }
+
+    pub fn synthesize_with_settings(&self, key: &[u8], text: &str, settings: &crate::voice_settings::VoiceSettings) -> Result<TtsAudio, VoiceError> {
         if text.is_empty() || text.chars().count() >= 10_000 || text.chars().any(char::is_control) {
             return Err(VoiceError::InvalidRequest);
         }
         let bearer = bearer(key)?;
-        let request = json!({
-            "model": TTS_MODEL,
-            "text": text,
-            "stream": false,
-            "output_format": "hex",
-            "voice_setting": {"voice_id": TTS_VOICE, "speed": 1.0, "vol": 1.0, "pitch": 0},
-            "audio_setting": {"sample_rate": TTS_SOURCE_RATE, "format": "pcm", "channel": 1}
-        });
+        let request = synthesis_request(text, settings)?;
         let response = self
             .http
             .post(TTS_URL)
@@ -110,7 +107,7 @@ impl VoiceClient {
             pcm,
             TtsReceipt {
                 model: TTS_MODEL,
-                voice: TTS_VOICE.to_owned(),
+                voice: settings.voice.clone(),
                 sample_rate: TTS_SAMPLE_RATE,
                 samples,
                 characters,
@@ -119,6 +116,16 @@ impl VoiceClient {
             },
         ))
     }
+}
+
+#[doc(hidden)]
+pub fn synthesis_request(text: &str, settings: &crate::voice_settings::VoiceSettings) -> Result<Value, VoiceError> {
+    settings.validate().map_err(|_| VoiceError::InvalidRequest)?;
+    Ok(json!({
+        "model": TTS_MODEL, "text": text, "stream": false, "output_format": "hex",
+        "voice_setting": {"voice_id": settings.voice, "speed": settings.speed, "vol": 1.0, "pitch": 0},
+        "audio_setting": {"sample_rate": TTS_SOURCE_RATE, "format": "pcm", "channel": 1}
+    }))
 }
 
 fn bearer(key: &[u8]) -> Result<String, VoiceError> {
@@ -273,6 +280,7 @@ pub fn resample_pcm16_mono(source: &[u8]) -> Result<Vec<u8>, VoiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
 
     #[test]
     fn parses_asr_without_exposing_other_fields() {

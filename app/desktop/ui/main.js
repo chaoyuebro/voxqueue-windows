@@ -139,7 +139,7 @@ function renderDashboard(snapshot) {
     : `${providerName} · 未配置`;
   elements.asrModel.textContent = snapshot.provider.asr_model;
   elements.ttsModel.textContent = snapshot.provider.tts_model;
-  elements.ttsVoice.textContent = snapshot.provider.voice;
+  elements.ttsVoice.textContent = savedAnswerVoiceName || snapshot.provider.voice;
   elements.lanDiagnostics.textContent = snapshot.lan
     ? `入站 ${snapshot.lan.udp_received} · 心跳 ${snapshot.lan.heartbeat_received}/${snapshot.lan.heartbeat_authenticated} · 信箱发送/失败 ${snapshot.lan.mailbox_sent}/${snapshot.lan.mailbox_send_failed} · 语音帧 ${snapshot.lan.audio_frames_accepted} · 结束包 ${snapshot.lan.audio_ends_accepted} · 完整录音 ${snapshot.lan.captures_ready} · 录音失败 ${snapshot.lan.captures_rejected} · 识别成功/失败 ${snapshot.lan.asr_succeeded}/${snapshot.lan.asr_failed} · 任务交付 ${snapshot.lan.prompts_delivered} · 入队/去重/拒绝 ${snapshot.lan.queue_inserted}/${snapshot.lan.queue_replayed}/${snapshot.lan.queue_rejected} · 语音认证拒绝 ${snapshot.lan.audio_auth_rejected} · 设备密钥${snapshot.lan.auth_key_loaded ? "已加载" : "缺失"}`
     : "Host 尚未提供诊断";
@@ -474,3 +474,58 @@ void loadFirmware();
 window.setInterval(() => {
   if (!firmwareUI.panel.hidden || flashPhase === "waiting" || flashPhase === "flashing") void pollFlash();
 }, 750);
+
+const answerVoiceUI = {
+  form: /** @type {HTMLFormElement} */ (requiredElement("#answer-voice-form")),
+  voice: /** @type {HTMLSelectElement} */ (requiredElement("#answer-voice")),
+  speed: /** @type {HTMLInputElement} */ (requiredElement("#answer-speed")),
+  value: requiredElement("#answer-speed-value"),
+  save: /** @type {HTMLButtonElement} */ (requiredElement("#answer-voice-save")),
+  status: requiredElement("#answer-voice-status"),
+};
+let savedAnswerVoiceName = "";
+function showAnswerSpeed() {
+  answerVoiceUI.value.textContent = `${Number(answerVoiceUI.speed.value).toFixed(2)}×`;
+}
+answerVoiceUI.speed.addEventListener("input", showAnswerSpeed);
+answerVoiceUI.form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  answerVoiceUI.save.disabled = true;
+  answerVoiceUI.status.textContent = "正在保存…";
+  try {
+    await window.__TAURI__.core.invoke("save_answer_voice_settings", {
+      settings: { voice: answerVoiceUI.voice.value, speed: Number(answerVoiceUI.speed.value) },
+    });
+    savedAnswerVoiceName = answerVoiceUI.voice.selectedOptions[0]?.textContent || "";
+    elements.ttsVoice.textContent = savedAnswerVoiceName;
+    answerVoiceUI.status.textContent = "已保存，将用于之后生成的回答";
+  } catch (error) {
+    answerVoiceUI.status.textContent = `保存失败：${String(error)}`;
+  } finally {
+    answerVoiceUI.save.disabled = false;
+  }
+});
+async function loadAnswerVoiceSettings() {
+  try {
+    const preferences = await window.__TAURI__.core.invoke("answer_voice_settings");
+    answerVoiceUI.voice.replaceChildren();
+    for (const voice of preferences.voices) {
+      const option = document.createElement("option");
+      option.value = voice.id;
+      option.textContent = voice.name;
+      answerVoiceUI.voice.append(option);
+    }
+    answerVoiceUI.voice.value = preferences.settings.voice;
+    answerVoiceUI.speed.value = String(preferences.settings.speed);
+    showAnswerSpeed();
+    savedAnswerVoiceName = answerVoiceUI.voice.selectedOptions[0]?.textContent || "";
+    elements.ttsVoice.textContent = savedAnswerVoiceName;
+    answerVoiceUI.voice.disabled = false;
+    answerVoiceUI.speed.disabled = false;
+    answerVoiceUI.save.disabled = false;
+    answerVoiceUI.status.textContent = "设置重启后保留";
+  } catch (error) {
+    answerVoiceUI.status.textContent = `设置读取失败：${String(error)}`;
+  }
+}
+void loadAnswerVoiceSettings();

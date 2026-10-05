@@ -272,6 +272,8 @@ fn main() {
             host_dashboard,
             bind_slot,
             clear_summary_queue,
+            answer_voice_settings,
+            save_answer_voice_settings,
             open_codex_task,
             firmware_info,
             firmware_flash_status,
@@ -288,6 +290,31 @@ fn main() {
 }
 #[cfg(any(target_os = "macos", windows))]
 mod firmware_flash;
+
+#[cfg(any(target_os = "macos", windows))]
+#[derive(Serialize)]
+struct AnswerVoicePreferences {
+    settings: easy_codex_host::voice_settings::VoiceSettings,
+    voices: Vec<easy_codex_host::voice_settings::VoiceOption>,
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
+fn answer_voice_settings() -> Result<AnswerVoicePreferences, String> {
+    let paths = app_paths().ok_or("数据目录不可用")?;
+    Ok(AnswerVoicePreferences {
+        settings: easy_codex_host::voice_settings::VoiceSettings::load(&paths.root).map_err(|e| e.to_string())?,
+        voices: easy_codex_host::voice_settings::voices(),
+    })
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
+fn save_answer_voice_settings(settings: easy_codex_host::voice_settings::VoiceSettings) -> Result<easy_codex_host::voice_settings::VoiceSettings, String> {
+    let paths = app_paths().ok_or("数据目录不可用")?;
+    settings.save(&paths.root).map_err(|e| e.to_string())?;
+    Ok(settings)
+}
 
 #[cfg(any(target_os = "macos", windows))]
 #[tauri::command]
