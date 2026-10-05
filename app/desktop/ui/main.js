@@ -129,7 +129,7 @@ function slotSnapshot(slot) {
 /** @param {import("./view-model.js").DashboardSnapshot} snapshot */
 function renderDashboard(snapshot) {
   dashboard = snapshot;
-  const tasks = sortedTasks(snapshot.tasks);
+  const tasks = sortedTasks(snapshot.tasks.filter((task) => !task.cli_created));
   elements.taskCount.textContent = `${tasks.length} 个任务`;
   elements.providerDot.className = `provider-dot ${snapshot.provider.configured ? "ready" : "offline"}`;
   const providerName = snapshot.provider.region === "minimax-cn" ? "MiniMax" : "北京区";
@@ -229,9 +229,11 @@ function renderDashboard(snapshot) {
       selected &&
       !Array.from(select.options).some((option) => option.value === selected)
     ) {
-      select.add(
-        new Option(`${slot.task_name ?? "不可用任务"} · 已移出列表`, selected),
-      );
+      const cliBinding = snapshot.tasks.some((task) => task.task_id === selected && task.cli_created);
+      const option = new Option(cliBinding ? "当前绑定已隐藏 · 请选择桌面对话" : `${slot.task_name ?? "不可用任务"} · 已移出列表`, selected);
+      option.hidden = cliBinding;
+      option.disabled = cliBinding;
+      select.add(option);
     }
     select.value = selected;
     /** @type {HTMLButtonElement} */ (
