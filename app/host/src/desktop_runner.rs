@@ -19,7 +19,9 @@ use crate::store::{Job, JobFailureKind};
 
 type Result<T> = std::result::Result<T, JobFailureKind>;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
-const MAX_LINE: usize = 1024 * 1024;
+// Desktop tool events can embed screenshots and exceed 1 MiB even for a short
+// conversation. Keep JSONL records bounded, using the same budget as IPC frames.
+const MAX_LINE: usize = MAX_FRAME;
 const MAX_ROLLOUT: u64 = 256 * 1024 * 1024;
 
 #[link(name = "Kernel32")]
@@ -552,6 +554,36 @@ mod tests {
             ),
             Err(JobFailureKind::ExitFailure)
         );
+    }
+
+    #[test]
+    fn large_tool_event_preserves_matching_lifecycle_completion() {
+        let (_dir, path) = fixture();
+        append(&path, json!({"type":"session_meta","payload":{"id":"thread"}}));
+        append(&path, event("task_started", "historical"));
+        append(&path, json!({"type":"event_msg","payload":{
+            "type":"item_completed", "output":"x".repeat(3 * 1024 * 1024)}}));
+        append(&path, event("task_complete", "historical"));
+        let mut scan = Lifecycle::open(&path).unwrap();
+        assert_eq!(scan.session_id.as_deref(), Some("thread"));
+        assert!(scan.active.is_none());
+        append(&path, event("task_started", "new"));
+        append(&path, event("task_complete", "unrelated"));
+        scan.poll().unwrap();
+        assert_eq!(scan.active.as_deref(), Some("new"));
+        assert!(!scan.terminal.contains_key("new"));
+        append(&path, event("task_complete", "new"));
+        scan.wait_turn("new", &AtomicBool::new(false),
+            Instant::now() + Duration::from_secs(1)).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires VOXQUEUE_ROLLOUT_REPLAY pointing to a local rollout"]
+    fn replay_existing_rollout_without_sending_a_prompt() {
+        let path = std::env::var_os("VOXQUEUE_ROLLOUT_REPLAY").expect("rollout path required");
+        let mut scan = Lifecycle::open(Path::new(&path)).unwrap();
+        assert!(scan.session_id.is_some());
+        scan.poll().unwrap();
     }
 
     #[test]
