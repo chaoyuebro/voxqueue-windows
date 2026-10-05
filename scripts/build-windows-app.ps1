@@ -11,6 +11,7 @@ if (Test-Path -LiteralPath (Join-Path $toolchainRoot 'cargo\bin\cargo.exe')) {
 
 Push-Location $projectRoot
 try {
+    & (Join-Path $PSScriptRoot 'prepare-windows-flasher.ps1') -Offline:$Offline
     $cargoArgs = @('build', '-p', 'easy-codex-host', '--bin', 'easy-codex-host', '--release', '--locked')
     if ($Offline) { $cargoArgs += '--offline' }
     & cargo @cargoArgs

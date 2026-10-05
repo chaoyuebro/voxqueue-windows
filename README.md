@@ -13,6 +13,8 @@ VoxQueue 是基于 EasyInput V2 的 Windows 四槽语音任务键盘。本仓库
 
 当前版本不代表所有平台测试或长稳测试已经通过；旧安装包需要升级才能使用桌面投递。
 
+Windows 桌面现已增加独立“固件烧录”页，内置当前 EasyInput V2 固件和烧录工具，支持等待串口、进度、校验结果和日志。使用及验证见 [桌面内固件烧录](docs/firmware-flashing-ui.md)。
+
 每个槽位已增加“清除待听”按钮，已看过的对应队列可单独标记已读；新完成内容继续提示。使用和验证见 [清除待听队列](docs/clear-summary-queue.md)。
 
 Windows MiniMax 语音开发候选的安装说明见 [docs/windows-minimax-setup.md](docs/windows-minimax-setup.md)。原 `v0.1.0-windows-preview.1` 发布包仍使用百炼。

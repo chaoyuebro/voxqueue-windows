@@ -803,6 +803,7 @@ version = "0.1.0"
 dependencies = [
  "easy-codex-host",
  "serde",
+ "sha2",
  "tauri",
  "tauri-build",
  "uuid",

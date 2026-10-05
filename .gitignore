@@ -16,6 +16,8 @@ app/**/dist/
 app/**/target/
 app/desktop/src-tauri/gen/
 app/desktop/src-tauri/resources/*.exe
+app/desktop/src-tauri/resources/*.bin
+app/desktop/src-tauri/resources/esptool/
 app/**/.wrangler/
 app/**/.vite/
 app/**/.dev.vars

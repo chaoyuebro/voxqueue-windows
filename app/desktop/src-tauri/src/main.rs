@@ -232,6 +232,14 @@ fn open_codex_task(task_id: String) -> Result<(), &'static str> {
 #[cfg(any(target_os = "macos", windows))]
 fn main() {
     tauri::Builder::default()
+        .manage(firmware_flash::FirmwareFlasher::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                use tauri::Manager;
+                // Keep the write alive. The UI exposes cancellation only while waiting.
+                if window.state::<firmware_flash::FirmwareFlasher>().busy() { api.prevent_close(); }
+            }
+        })
         .setup(|app| {
             #[cfg(windows)]
             {
@@ -264,7 +272,11 @@ fn main() {
             host_dashboard,
             bind_slot,
             clear_summary_queue,
-            open_codex_task
+            open_codex_task,
+            firmware_info,
+            firmware_flash_status,
+            start_firmware_flash,
+            cancel_firmware_flash
         ])
         .run(tauri::generate_context!())
         .expect("VoxQueue desktop runtime failed");
@@ -273,4 +285,32 @@ fn main() {
 #[cfg(not(any(target_os = "macos", windows)))]
 fn main() {
     println!("VoxQueue desktop requires macOS or Windows");
+}
+#[cfg(any(target_os = "macos", windows))]
+mod firmware_flash;
+
+#[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
+fn firmware_info(app: tauri::AppHandle) -> Result<firmware_flash::FirmwareInfo, String> {
+    use tauri::Manager;
+    Ok(firmware_flash::info(&app.path().resource_dir().map_err(|e| e.to_string())?))
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
+fn firmware_flash_status(state: tauri::State<'_, firmware_flash::FirmwareFlasher>) -> firmware_flash::FlashSnapshot {
+    state.snapshot()
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
+fn start_firmware_flash(app: tauri::AppHandle, state: tauri::State<'_, firmware_flash::FirmwareFlasher>, expected_sha256: String) -> Result<firmware_flash::FlashSnapshot, String> {
+    use tauri::Manager;
+    state.start(app.path().resource_dir().map_err(|e| e.to_string())?, expected_sha256)
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
+fn cancel_firmware_flash(state: tauri::State<'_, firmware_flash::FirmwareFlasher>) -> Result<(), String> {
+    state.cancel_wait()
 }

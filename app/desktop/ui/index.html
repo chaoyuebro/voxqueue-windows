@@ -29,10 +29,8 @@
       <div class="workspace">
         <aside class="sidebar" aria-label="设备状态">
           <p class="side-heading">工作台</p>
-          <a class="side-link active" href="#keyboard-overview">▦ <span>键盘总览</span></a>
-          <a class="side-link" href="#binding-title">⌁ <span>槽位绑定</span></a>
-          <a class="side-link" href="#provider-title">◉ <span>语音服务</span></a>
-          <a class="side-link" href="#diagnostics-title">≡ <span>设备诊断</span></a>
+          <a class="side-link active" href="#keyboard-overview" data-page="overview">▦ <span>键盘总览</span></a>
+          <a class="side-link" href="#firmware-panel" data-page="firmware">⇩ <span>固件烧录</span></a>
 
           <section id="status-band" class="status-band checking" aria-live="polite">
             <span id="status-dot" class="status-dot checking"></span>
@@ -83,6 +81,29 @@
           <div class="overview-footer">
             <span><i class="footer-dot"></i>设备与电脑通过本地网络连接</span>
             <span id="last-updated">尚未收到状态</span>
+          </div>
+        </section>
+
+        <section id="firmware-panel" class="firmware-panel" aria-labelledby="firmware-title" hidden>
+          <p class="eyebrow">EASYINPUT V2 · USB</p>
+          <h1 id="firmware-title">烧录当前固件</h1>
+          <p class="firmware-intro">将 VoxQueue 内置的固件更新到键盘。保留配网、音量和声音资源。</p>
+          <div class="firmware-card">
+            <h2 id="firmware-name">正在读取当前固件…</h2>
+            <p>适用于 EasyInput V2，使用 USB 数据线连接电脑。</p>
+            <details class="firmware-checksum"><summary>固件校验值</summary><code id="firmware-sha">--</code></details>
+            <ol class="firmware-steps">
+              <li>连接键盘后，点击“开始烧录”。</li>
+              <li>将键盘电源关机，再开机一次；不用按 BOOT。</li>
+              <li>写入期间保持连接，成功后键盘会自动重启。</li>
+            </ol>
+            <div class="firmware-actions">
+              <button id="flash-start" type="button" disabled>开始烧录</button>
+              <button id="flash-cancel" type="button" hidden>取消等待</button>
+            </div>
+            <p id="flash-status" class="flash-status" role="status">准备中</p>
+            <progress id="flash-progress" max="100" value="0" hidden></progress>
+            <details id="flash-log-details" class="firmware-log"><summary>烧录日志</summary><pre id="flash-log">尚未开始</pre></details>
           </div>
         </section>
 

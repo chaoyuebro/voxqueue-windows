@@ -3,7 +3,9 @@
     "targets": ["nsis"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"],
     "resources": {
-      "resources/easy-codex-host.exe": "easy-codex-host.exe"
+      "resources/easy-codex-host.exe": "easy-codex-host.exe",
+      "resources/current-firmware.bin": "current-firmware.bin",
+      "resources/esptool/": "esptool/"
     }
   }
 }

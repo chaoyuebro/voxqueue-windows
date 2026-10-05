@@ -367,3 +367,103 @@ for (const button of Array.from(document.querySelectorAll(".device-key"))) {
 }
 void refresh();
 window.setInterval(refresh, 3000);
+
+
+const firmwareUI = {
+  panel: requiredElement("#firmware-panel"),
+  start: requiredElement("#flash-start"),
+  cancel: requiredElement("#flash-cancel"),
+  status: requiredElement("#flash-status"),
+  progress: requiredElement("#flash-progress"),
+  log: requiredElement("#flash-log"),
+};
+let currentFirmware = null;
+let flashPhase = "";
+let flashPollPending = false;
+
+function showWorkspacePage(page) {
+  const flashing = page === "firmware";
+  requiredElement(".workspace").classList.toggle("firmware-page", flashing);
+  requiredElement("#keyboard-overview").hidden = flashing;
+  firmwareUI.panel.hidden = !flashing;
+  document.querySelectorAll("[data-page]").forEach((link) => {
+    const active = link.getAttribute("data-page") === page;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  requiredElement(".top-nav-active").textContent = flashing ? "固件烧录" : "语音键盘";
+}
+for (const link of document.querySelectorAll("[data-page]")) {
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    showWorkspacePage(link.getAttribute("data-page"));
+  });
+}
+
+function renderFlash(snapshot) {
+  flashPhase = snapshot.phase || "";
+  const busy = flashPhase === "waiting" || flashPhase === "flashing";
+  firmwareUI.start.disabled = busy || !currentFirmware?.available;
+  firmwareUI.start.textContent = busy ? "烧录进行中…" : "开始烧录";
+  firmwareUI.cancel.hidden = flashPhase !== "waiting";
+  firmwareUI.cancel.disabled = false;
+  firmwareUI.status.textContent = snapshot.message || (currentFirmware?.available ? "固件已就绪" : "当前安装缺少固件或烧录工具");
+  firmwareUI.status.dataset.phase = flashPhase;
+  firmwareUI.progress.hidden = flashPhase !== "flashing" && flashPhase !== "completed";
+  if (snapshot.progress == null) firmwareUI.progress.removeAttribute("value");
+  else firmwareUI.progress.value = snapshot.progress;
+  firmwareUI.log.textContent = snapshot.log?.join("\n") || "尚未开始";
+  if (flashPhase === "failed") requiredElement("#flash-log-details").open = true;
+}
+
+async function pollFlash() {
+  const invoke = window.__TAURI__?.core?.invoke;
+  if (!invoke || flashPollPending) return;
+  flashPollPending = true;
+  try {
+    renderFlash(await invoke("firmware_flash_status"));
+  } catch (error) {
+    firmwareUI.status.textContent = `烧录状态读取失败：${String(error)}`;
+  } finally {
+    flashPollPending = false;
+  }
+}
+firmwareUI.start.addEventListener("click", async () => {
+  if (!currentFirmware?.available) return;
+  firmwareUI.start.disabled = true;
+  firmwareUI.status.textContent = "正在校验固件…";
+  try {
+    renderFlash(await window.__TAURI__.core.invoke("start_firmware_flash", {
+      expectedSha256: currentFirmware.sha256,
+    }));
+  } catch (error) {
+    firmwareUI.status.textContent = String(error);
+    firmwareUI.status.dataset.phase = "failed";
+    firmwareUI.start.disabled = false;
+  }
+});
+firmwareUI.cancel.addEventListener("click", async () => {
+  firmwareUI.cancel.disabled = true;
+  try {
+    await window.__TAURI__.core.invoke("cancel_firmware_flash");
+    await pollFlash();
+  } catch (error) {
+    firmwareUI.status.textContent = String(error);
+  }
+});
+async function loadFirmware() {
+  try {
+    currentFirmware = await window.__TAURI__.core.invoke("firmware_info");
+    requiredElement("#firmware-name").textContent = currentFirmware.name;
+    requiredElement("#firmware-sha").textContent = currentFirmware.sha256;
+    await pollFlash();
+  } catch (error) {
+    firmwareUI.status.textContent = `当前固件不可用：${String(error)}`;
+  }
+}
+showWorkspacePage("overview");
+void loadFirmware();
+window.setInterval(() => {
+  if (!firmwareUI.panel.hidden || flashPhase === "waiting" || flashPhase === "flashing") void pollFlash();
+}, 750);

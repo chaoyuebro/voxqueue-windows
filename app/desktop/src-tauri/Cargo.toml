@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 easy-codex-host = { path = "../../host" }
 serde.workspace = true
+sha2.workspace = true
 uuid.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
