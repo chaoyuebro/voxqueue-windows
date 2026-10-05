@@ -405,10 +405,10 @@ function renderFlash(snapshot) {
   flashPhase = snapshot.phase || "";
   const busy = flashPhase === "waiting" || flashPhase === "flashing";
   firmwareUI.start.disabled = busy || !currentFirmware?.available;
-  firmwareUI.start.textContent = busy ? "烧录进行中…" : "开始烧录";
+  firmwareUI.start.textContent = busy ? "恢复进行中…" : "开始恢复";
   firmwareUI.cancel.hidden = flashPhase !== "waiting";
   firmwareUI.cancel.disabled = false;
-  firmwareUI.status.textContent = snapshot.message || (currentFirmware?.available ? "固件已就绪" : "当前安装缺少固件或烧录工具");
+  firmwareUI.status.textContent = snapshot.message || (currentFirmware?.available ? "完整恢复包已就绪" : "当前安装缺少恢复镜像或烧录工具");
   firmwareUI.status.dataset.phase = flashPhase;
   firmwareUI.progress.hidden = flashPhase !== "flashing" && flashPhase !== "completed";
   if (snapshot.progress == null) firmwareUI.progress.removeAttribute("value");
@@ -432,7 +432,7 @@ async function pollFlash() {
 firmwareUI.start.addEventListener("click", async () => {
   if (!currentFirmware?.available) return;
   firmwareUI.start.disabled = true;
-  firmwareUI.status.textContent = "正在校验固件…";
+  firmwareUI.status.textContent = "正在校验完整恢复包…";
   try {
     renderFlash(await window.__TAURI__.core.invoke("start_firmware_flash", {
       expectedSha256: currentFirmware.sha256,
@@ -457,6 +457,13 @@ async function loadFirmware() {
     currentFirmware = await window.__TAURI__.core.invoke("firmware_info");
     requiredElement("#firmware-name").textContent = currentFirmware.name;
     requiredElement("#firmware-sha").textContent = currentFirmware.sha256;
+    const images = requiredElement("#firmware-images");
+    images.replaceChildren();
+    for (const image of currentFirmware.images || []) {
+      const row = document.createElement("p");
+      row.textContent = `${image.name} · 0x${image.address.toString(16)}\n${image.sha256}`;
+      images.append(row);
+    }
     await pollFlash();
   } catch (error) {
     firmwareUI.status.textContent = `当前固件不可用：${String(error)}`;

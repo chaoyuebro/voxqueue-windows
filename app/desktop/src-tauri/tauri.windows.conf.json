@@ -5,6 +5,8 @@
     "resources": {
       "resources/easy-codex-host.exe": "easy-codex-host.exe",
       "resources/current-firmware.bin": "current-firmware.bin",
+      "resources/current-bootloader.bin": "current-bootloader.bin",
+      "resources/current-partition-table.bin": "current-partition-table.bin",
       "resources/esptool/": "esptool/"
     }
   }

@@ -318,3 +318,5 @@ kbd {
 #flash-progress { display: block; width: 100%; margin: 14px 0 20px; accent-color: #bd5b3c; }
 .firmware-log { margin-top: 20px; }
 .firmware-log pre { max-height: 260px; overflow: auto; padding: 14px; border-radius: 8px; background: #faf6f2; font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+#firmware-images p { font-size: 11px; white-space: pre-line; overflow-wrap: anywhere; }

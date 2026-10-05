@@ -4,23 +4,102 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+pub const BOOTLOADER_SHA: &str = "be3abea605a6be7f04c2d0f4011bd90688f799a834a164cdc6a29b16c3324287";
+pub const PARTITION_SHA: &str = "7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278";
 pub const FIRMWARE_SHA: &str = "d7670a545bd35461e0fd6cf3f04d24a4ec1f3ffae64f54924ee3a5a18a7a1cc0";
 
 #[derive(Clone, Serialize)]
 pub struct FirmwareInfo {
     pub name: &'static str,
-    pub sha256: &'static str,
+    pub sha256: String,
+    pub images: Vec<RestoreImage>,
     pub available: bool,
+}
+
+#[derive(Clone, Copy, Serialize)]
+pub struct RestoreImage {
+    pub name: &'static str,
+    pub file: &'static str,
+    pub address: u32,
+    pub sha256: &'static str,
+    #[serde(skip)]
+    max_size: usize,
+}
+
+const IMAGES: [RestoreImage; 3] = [
+    RestoreImage {
+        name: "引导程序",
+        file: "current-bootloader.bin",
+        address: 0,
+        sha256: BOOTLOADER_SHA,
+        max_size: 0x8000,
+    },
+    RestoreImage {
+        name: "分区表",
+        file: "current-partition-table.bin",
+        address: 0x8000,
+        sha256: PARTITION_SHA,
+        max_size: 0x1000,
+    },
+    RestoreImage {
+        name: "VoxQueue 应用",
+        file: "current-firmware.bin",
+        address: 0x10000,
+        sha256: FIRMWARE_SHA,
+        max_size: 0x300000,
+    },
+];
+
+fn restore_sha() -> String {
+    // Fingerprint the entire reviewed restore plan, including write addresses.
+    let mut digest = Sha256::new();
+    for image in IMAGES {
+        digest.update(format!("{:08x}:{}\n", image.address, image.sha256));
+    }
+    format!("{:x}", digest.finalize())
 }
 
 pub fn info(resources: &Path) -> FirmwareInfo {
     FirmwareInfo {
-        name: "2026.10.05 · 桌面软件运行指示灯",
-        sha256: FIRMWARE_SHA,
+        name: "2026.10.05 · VoxQueue 完整恢复包",
+        sha256: restore_sha(),
+        images: IMAGES.to_vec(),
         available: cfg!(windows)
-            && resources.join("current-firmware.bin").is_file()
+            && IMAGES.iter().all(|i| resources.join(i.file).is_file())
             && resources.join("esptool/esptool.exe").is_file(),
     }
+}
+
+fn write_arguments(resources: &Path, port: &str) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = [
+        "--chip",
+        "esp32s3",
+        "--port",
+        port,
+        "--baud",
+        "460800",
+        "--before",
+        "usb_reset",
+        "--after",
+        "hard_reset",
+        "--connect-attempts",
+        "1",
+        "write_flash",
+        "--flash_mode",
+        "dio",
+        "--flash_freq",
+        "80m",
+        "--flash_size",
+        "16MB",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    for image in IMAGES {
+        args.push(format!("0x{:x}", image.address).into());
+        args.push(resources.join(image.file).into_os_string());
+    }
+    args
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -35,6 +114,7 @@ pub struct FlashSnapshot {
 struct State {
     snapshot: FlashSnapshot,
     cancelled: bool,
+    verified_images: usize,
 }
 
 #[derive(Clone, Default)]
@@ -62,8 +142,7 @@ impl FirmwareFlasher {
         if !cfg!(windows) {
             return Err("当前烧录功能支持 Windows".into());
         }
-        let firmware = resources.join("current-firmware.bin");
-        validate_image(&firmware, &reviewed_sha)?;
+        validate_restore(&resources, &reviewed_sha)?;
         if !resources.join("esptool/esptool.exe").is_file() {
             return Err("安装包缺少烧录工具，请重新安装 VoxQueue".into());
         }
@@ -72,17 +151,23 @@ impl FirmwareFlasher {
             return Err("已有烧录操作，请等待它结束".into());
         }
         state.cancelled = false;
+        state.verified_images = 0;
         state.snapshot = FlashSnapshot {
             phase: "waiting".into(),
             progress: None,
-            message: "请将键盘电源关机，再开机一次；不用按 BOOT。正在等待烧录串口…".into(),
-            log: vec!["固件 SHA-256 校验通过；仅更新应用，保留配网与声音资源。".into()],
+            message:
+                "正在等待下载串口。请将键盘关机再开机；若一直等待，在开机状态短按并松开 BOOT 一次。"
+                    .into(),
+            log: vec![
+                "三份镜像 SHA-256 校验通过；恢复引导程序、分区表和应用，保留配网与声音资源。"
+                    .into(),
+            ],
         };
         let snapshot = state.snapshot.clone();
         drop(state);
         let worker = self.clone();
         std::thread::spawn(move || {
-            if let Err(error) = worker.run(&resources, &firmware) {
+            if let Err(error) = worker.run(&resources) {
                 worker.finish("failed", &error);
             }
         });
@@ -98,7 +183,12 @@ impl FirmwareFlasher {
     fn append_log(&self, line: String) {
         let mut state = self.0.lock().unwrap();
         if let Some(progress) = parse_progress(&line) {
-            state.snapshot.progress = Some(progress);
+            state.snapshot.progress =
+                Some(((state.verified_images.min(2) as u16 * 100 + progress as u16) / 3) as u8);
+        }
+        if line.contains("Hash of data verified") {
+            state.verified_images = (state.verified_images + 1).min(IMAGES.len());
+            state.snapshot.progress = Some((state.verified_images * 100 / IMAGES.len()) as u8);
         }
         if state.snapshot.log.len() >= 180 {
             state.snapshot.log.remove(0);
@@ -107,7 +197,7 @@ impl FirmwareFlasher {
     }
 
     #[cfg(windows)]
-    fn run(&self, resources: &Path, firmware: &Path) -> Result<(), String> {
+    fn run(&self, resources: &Path) -> Result<(), String> {
         use std::io::Read;
         use std::os::windows::process::CommandExt;
         use std::process::{Command, Stdio};
@@ -131,6 +221,8 @@ impl FirmwareFlasher {
             }
             std::thread::sleep(Duration::from_millis(50));
         };
+        // Recheck all resources after the wait, before changing any device byte.
+        validate_restore(resources, &restore_sha())?;
         // Serialize this transition with cancel_wait: cancellation must never race a write.
         {
             let mut state = self.0.lock().unwrap();
@@ -144,29 +236,7 @@ impl FirmwareFlasher {
         }
         self.append_log(format!("已识别 {port} · 设备 {serial}"));
         let mut child = Command::new(resources.join("esptool/esptool.exe"))
-            .args([
-                "--chip",
-                "esp32s3",
-                "--port",
-                &port,
-                "--baud",
-                "460800",
-                "--before",
-                "usb_reset",
-                "--after",
-                "hard_reset",
-                "--connect-attempts",
-                "1",
-                "write_flash",
-                "--flash_mode",
-                "dio",
-                "--flash_freq",
-                "80m",
-                "--flash_size",
-                "16MB",
-                "0x10000",
-            ])
-            .arg(firmware)
+            .args(write_arguments(resources, &port))
             .env("PYTHONUNBUFFERED", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -207,10 +277,10 @@ impl FirmwareFlasher {
         let stderr = child.stderr.take().unwrap();
         readers.push(std::thread::spawn(move || read_lines(stderr, sender)));
         let deadline = Instant::now() + Duration::from_secs(180);
-        let mut verified = false;
+        let mut verified = 0;
         let exit = loop {
             while let Ok(line) = receiver.try_recv() {
-                verified |= line.contains("Hash of data verified");
+                verified += usize::from(line.contains("Hash of data verified"));
                 self.append_log(line);
             }
             match child.try_wait() {
@@ -233,36 +303,42 @@ impl FirmwareFlasher {
             let _ = reader.join();
         }
         for line in receiver.try_iter() {
-            verified |= line.contains("Hash of data verified");
+            verified += usize::from(line.contains("Hash of data verified"));
             self.append_log(line);
         }
-        if !exit.success() || !verified {
-            return Err("烧录未完成或校验失败，请查看下方日志".into());
+        if !exit.success() || verified != IMAGES.len() {
+            return Err("完整恢复未完成：需要三份镜像全部校验通过，请查看下方日志".into());
         }
         self.0.lock().unwrap().snapshot.progress = Some(100);
         self.finish(
             "completed",
-            "烧录成功，写入校验通过。键盘已自动重启，配网数据保留。",
+            "完整恢复成功，三份镜像写入校验通过。键盘已自动重启，配网和声音资源保留。",
         );
         Ok(())
     }
 
     #[cfg(not(windows))]
-    fn run(&self, _: &Path, _: &Path) -> Result<(), String> {
+    fn run(&self, _: &Path) -> Result<(), String> {
         Err("当前烧录功能支持 Windows".into())
     }
 }
 
-fn validate_image(path: &Path, reviewed_sha: &str) -> Result<(), String> {
-    if reviewed_sha != FIRMWARE_SHA {
-        return Err("固件版本已变化，请刷新页面后重新确认".into());
+fn validate_restore(resources: &Path, reviewed_sha: &str) -> Result<(), String> {
+    if reviewed_sha != restore_sha() {
+        return Err("恢复包版本已变化，请刷新页面后重新确认".into());
     }
-    let bytes = std::fs::read(path).map_err(|_| "安装包缺少当前固件，请重新安装 VoxQueue")?;
-    if bytes.len() > 0x300000
-        || bytes.len() < 65536
-        || format!("{:x}", Sha256::digest(&bytes)) != FIRMWARE_SHA
-    {
-        return Err("固件校验失败，已停止烧录；请重新安装 VoxQueue".into());
+    for image in IMAGES {
+        let bytes = std::fs::read(resources.join(image.file))
+            .map_err(|_| format!("安装包缺少{}，请重新安装 VoxQueue", image.name))?;
+        if bytes.is_empty()
+            || bytes.len() > image.max_size
+            || format!("{:x}", Sha256::digest(&bytes)) != image.sha256
+        {
+            return Err(format!(
+                "{}校验失败，已停止恢复；请重新安装 VoxQueue",
+                image.name
+            ));
+        }
     }
     Ok(())
 }
@@ -431,13 +507,92 @@ mod tests {
         assert_eq!(parse_progress("Writing at 0x10000... (101 %)"), None);
         assert_eq!(parse_progress("Compressed (99 %)"), None);
     }
-    #[test]
-    fn rejects_tampered_and_unreviewed_firmware() {
+    fn reviewed_resources() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("image.bin");
-        std::fs::write(&file, vec![0u8; 65536]).unwrap();
-        assert!(validate_image(&file, FIRMWARE_SHA).is_err());
-        assert!(validate_image(&file, "other-version").is_err());
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        for (source, image) in [
+            "bootloader-20261005.bin",
+            "partition-table-20261005.bin",
+            "desktop-presence-20261005.bin",
+        ]
+        .into_iter()
+        .zip(IMAGES)
+        {
+            std::fs::copy(
+                root.join("firmware/releases").join(source),
+                dir.path().join(image.file),
+            )
+            .unwrap();
+        }
+        dir
+    }
+    #[test]
+    fn all_reviewed_images_must_match_before_any_write() {
+        let resources = reviewed_resources();
+        assert!(validate_restore(resources.path(), &restore_sha()).is_ok());
+        assert!(validate_restore(resources.path(), FIRMWARE_SHA).is_err());
+        for image in IMAGES {
+            let path = resources.path().join(image.file);
+            let original = std::fs::read(&path).unwrap();
+            let mut changed = original.clone();
+            changed[0] ^= 1;
+            std::fs::write(&path, changed).unwrap();
+            assert!(validate_restore(resources.path(), &restore_sha()).is_err());
+            std::fs::write(&path, &original).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            assert!(validate_restore(resources.path(), &restore_sha()).is_err());
+            std::fs::write(&path, original).unwrap();
+        }
+    }
+    #[test]
+    fn complete_restore_writes_three_ranges_and_preserves_user_data() {
+        let resources = reviewed_resources();
+        let args = write_arguments(resources.path(), "COM7");
+        assert!(!args.iter().any(|a| a.to_string_lossy().contains("erase")));
+        let image_args = &args[19..];
+        assert_eq!(image_args.len(), 6);
+        for (pair, image) in image_args.chunks_exact(2).zip(IMAGES) {
+            assert_eq!(pair[0].to_string_lossy(), format!("0x{:x}", image.address));
+            assert_eq!(Path::new(&pair[1]), resources.path().join(image.file));
+            let len = std::fs::metadata(resources.path().join(image.file))
+                .unwrap()
+                .len() as u32;
+            let erased_end = (image.address + len + 4095) & !4095;
+            for (start, end) in [(0x9000, 0x10000), (0x310000, 0x430000)] {
+                assert!(erased_end <= start || image.address >= end);
+            }
+        }
+        let table = std::fs::read(resources.path().join(IMAGES[1].file)).unwrap();
+        let mut apps = Vec::new();
+        for row in table
+            .chunks_exact(32)
+            .take_while(|r| r[..2] == [0xaa, 0x50])
+        {
+            if row[2] == 0 {
+                apps.push((row[3], u32::from_le_bytes(row[4..8].try_into().unwrap())));
+            }
+            assert!(
+                !(row[2] == 1 && row[3] == 0),
+                "OTA selection must not remain in the restored table"
+            );
+        }
+        assert_eq!(apps, vec![(0, 0x10000)]);
+    }
+    #[test]
+    fn multi_image_progress_does_not_finish_at_bootloader_100_percent() {
+        let flasher = FirmwareFlasher::default();
+        flasher.append_log("Writing at 0x00000000... (100 %)".into());
+        assert_eq!(flasher.snapshot().progress, Some(33));
+        flasher.append_log("Hash of data verified.".into());
+        flasher.append_log("Writing at 0x00008000... (100 %)".into());
+        assert_eq!(flasher.snapshot().progress, Some(66));
+        flasher.append_log("Hash of data verified.".into());
+        flasher.append_log("Writing at 0x00010000... (50 %)".into());
+        assert_eq!(flasher.snapshot().progress, Some(83));
     }
     #[test]
     fn cannot_cancel_a_write_and_retains_bounded_log() {
