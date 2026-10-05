@@ -101,8 +101,8 @@ impl VoiceClient {
             _ => VoiceError::AmbiguousAfterCommit,
         })?;
         let (source, characters) = parse_tts(&body)?;
-        let mut pcm = resample_pcm16_mono(&source)?;
-        apply_volume(&mut pcm, settings.volume)?;
+        let pcm = resample_pcm16_mono(&source)?;
+        // Keyboard hardware volume is the sole playback volume control.
         let samples = (pcm.len() / 2) as u64;
         Ok(TtsAudio::from_provider(
             pcm,
