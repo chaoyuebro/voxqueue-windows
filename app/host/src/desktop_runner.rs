@@ -365,7 +365,32 @@ fn journal(path: &Path) -> Result<Connection> {
             turn_id TEXT, state TEXT NOT NULL CHECK(state IN ('intent','accepted','completed','aborted')));
         CREATE INDEX IF NOT EXISTS delivery_task ON deliveries(task_id);")
         .map_err(|_| JobFailureKind::ProcessIo)?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS delivery_evidence (
+        request_id TEXT PRIMARY KEY, sent_at_ms INTEGER NOT NULL, baseline TEXT NOT NULL, prompt TEXT NOT NULL);")
+        .map_err(|_| JobFailureKind::ProcessIo)?;
     Ok(db)
+}
+
+fn confirm_from_notifications(db: &Connection, job: &Job, scan: &mut Subscription, cancel: &AtomicBool, deadline: Instant) -> Result<String> {
+    let evidence: Option<(i64, String)> = db.query_row(
+        "SELECT sent_at_ms,baseline FROM delivery_evidence WHERE request_id=?1", [&job.request_id],
+        |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|_| JobFailureKind::ProcessIo)?;
+    let (sent_at, baseline) = evidence.ok_or(JobFailureKind::DeliveryUncertain)?;
+    let sent_at = u64::try_from(sent_at).map_err(|_| JobFailureKind::InvalidOutput)?;
+    let baseline: Vec<String> = serde_json::from_str(&baseline).map_err(|_| JobFailureKind::InvalidOutput)?;
+    let deadline = deadline.min(Instant::now() + Duration::from_secs(15));
+    loop {
+        check(cancel, deadline).map_err(|_| JobFailureKind::DeliveryUncertain)?;
+        if let Some(turn) = scan.state.matching_delivery(&baseline, &job.prompt, sent_at) {
+            db.execute("UPDATE deliveries SET state='accepted',turn_id=?2 WHERE request_id=?1 AND state='intent'",
+                params![job.request_id, turn]).map_err(|_| JobFailureKind::ProcessIo)?;
+            return Ok(turn);
+        }
+        if scan.poll(cancel, deadline).is_err() {
+            // Reconnect and request a fresh state snapshot; never send the prompt again.
+            *scan = Subscription::connect(&job.task_id, cancel, deadline).map_err(|_| JobFailureKind::DeliveryUncertain)?;
+        }
+    }
 }
 
 pub fn run(job: &Job, cancel: &AtomicBool, timeout: Duration, journal_path: &Path) -> Result<()> {
@@ -401,9 +426,6 @@ pub fn run(job: &Job, cancel: &AtomicBool, timeout: Duration, journal_path: &Pat
     if matches!(&prior, Some((state, _)) if state == "aborted") {
         return Err(JobFailureKind::ExitFailure);
     }
-    if matches!(&prior, Some((state, _)) if state == "intent") {
-        return Err(JobFailureKind::DeliveryUncertain);
-    }
     // A recovered pre-upgrade CLI claim has no desktop delivery evidence. Never guess and resend.
     if prior.is_none() && job.recovery_count > 0 {
         return Err(JobFailureKind::DeliveryUncertain);
@@ -427,10 +449,12 @@ pub fn run(job: &Job, cancel: &AtomicBool, timeout: Duration, journal_path: &Pat
         .map_err(|_| JobFailureKind::ProcessIo)?;
     for row in older {
         let (id, state, turn) = row.map_err(|_| JobFailureKind::ProcessIo)?;
-        if state == "intent" {
-            return Err(JobFailureKind::DeliveryUncertain);
-        }
-        let turn = turn.ok_or(JobFailureKind::InvalidOutput)?;
+        let turn = if state == "intent" {
+            let prompt: Option<String> = db.query_row("SELECT prompt FROM delivery_evidence WHERE request_id=?1",
+                [&id], |row| row.get(0)).optional().map_err(|_| JobFailureKind::ProcessIo)?;
+            let pending = Job { request_id: id.clone(), prompt: prompt.ok_or(JobFailureKind::DeliveryUncertain)?, ..job.clone() };
+            confirm_from_notifications(&db, &pending, &mut scan, cancel, deadline)?
+        } else { turn.ok_or(JobFailureKind::InvalidOutput)? };
         let outcome = scan.wait_turn(&turn, cancel, deadline);
         if matches!(outcome, Ok(()) | Err(JobFailureKind::ExitFailure)) {
             finish(&db, &id, outcome.is_ok())?;
@@ -438,16 +462,25 @@ pub fn run(job: &Job, cancel: &AtomicBool, timeout: Duration, journal_path: &Pat
             return outcome;
         }
     }
-    let turn = if let Some((_, Some(turn))) = prior {
+    let turn = if matches!(&prior, Some((state, _)) if state == "intent") {
+        confirm_from_notifications(&db, job, &mut scan, cancel, deadline)?
+    } else if let Some((_, Some(turn))) = prior {
         turn
     } else {
         scan.wait_idle(cancel, deadline)?;
         let target = scan.state.owner.clone();
-        db.execute(
+        let baseline: Vec<_> = scan.state.turns().iter().filter_map(|turn| turn["turnId"].as_str().map(str::to_owned)).collect();
+        let sent_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| JobFailureKind::ProcessIo)?.as_millis() as u64;
+        let transaction = db.unchecked_transaction().map_err(|_| JobFailureKind::ProcessIo)?;
+        transaction.execute(
             "INSERT INTO deliveries(request_id,task_id,state) VALUES(?1,?2,'intent')",
             params![job.request_id, job.task_id],
         )
         .map_err(|_| JobFailureKind::ProcessIo)?;
+        transaction.execute("INSERT INTO delivery_evidence(request_id,sent_at_ms,baseline,prompt) VALUES(?1,?2,?3,?4)",
+            params![job.request_id, sent_at as i64, serde_json::to_string(&baseline).map_err(|_| JobFailureKind::InvalidOutput)?, job.prompt])
+            .map_err(|_| JobFailureKind::ProcessIo)?;
+        transaction.commit().map_err(|_| JobFailureKind::ProcessIo)?;
         let reply = scan.ipc
             .request(
                 "thread-follower-start-turn",
@@ -456,13 +489,12 @@ pub fn run(job: &Job, cancel: &AtomicBool, timeout: Duration, journal_path: &Pat
                 Some(&target),
                 cancel,
                 deadline,
-            )
-            .map_err(|_| JobFailureKind::DeliveryUncertain)?;
-        let turn = reply
-            .pointer("/result/result/turn/id")
-            .and_then(Value::as_str)
-            .ok_or(JobFailureKind::InvalidOutput)?
-            .to_owned();
+            );
+        let turn = match reply {
+            Ok(reply) if reply.pointer("/result/result/turn/id").and_then(Value::as_str).is_some() =>
+                reply.pointer("/result/result/turn/id").and_then(Value::as_str).unwrap().to_owned(),
+            _ => confirm_from_notifications(&db, job, &mut scan, cancel, deadline)?,
+        };
         db.execute(
             "UPDATE deliveries SET state='accepted',turn_id=?2 WHERE request_id=?1",
             params![job.request_id, turn],

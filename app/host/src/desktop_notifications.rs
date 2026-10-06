@@ -334,11 +334,59 @@ impl StreamState {
             _ => None,
         }
     }
+
+    pub(crate) fn matching_delivery(&self, baseline: &[String], prompt: &str, sent_at: u64) -> Option<String> {
+        if self.revision.is_none() { return None; }
+        let mut candidates = BTreeSet::new();
+        for turn in self.turns() {
+            let Some(id) = turn["turnId"].as_str() else { continue; };
+            if baseline.iter().any(|old| old == id) || uuid::Uuid::parse_str(id).is_err() { continue; }
+            let Some(started) = turn["turnStartedAtMs"].as_u64() else { continue; };
+            if started < sent_at || started > sent_at.saturating_add(45_000) { continue; }
+            let inputs = turn["params"]["input"].as_array();
+            let exact = inputs.is_some_and(|inputs| inputs.len() == 1 && inputs[0]["type"] == "text" && inputs[0]["text"].as_str() == Some(prompt));
+            if exact { candidates.insert(id.to_owned()); }
+        }
+        if candidates.len() == 1 { candidates.into_iter().next() } else { None }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lost_ack_matches_only_one_new_exact_input_in_send_window() {
+        let id = "01a110b4-b3e6-76d2-9163-2befa6a92636";
+        let other = "01a110b6-44c5-7751-b8e8-d9ad724a5770";
+        let mut state = StreamState::new(TASK, "owner");
+        let candidate = json!({"turnId":id,"turnStartedAtMs":1001,"status":"completed","error":null,
+            "params":{"input":[{"type":"text","text":"test"}]},"items":[]});
+        state.apply(&snapshot(candidate.clone())).unwrap();
+        assert_eq!(state.matching_delivery(&[], "test", 1000).as_deref(), Some(id));
+        assert_eq!(state.matching_delivery(&[id.to_owned()], "test", 1000), None);
+        assert_eq!(state.matching_delivery(&[], "different", 1000), None);
+        assert_eq!(state.matching_delivery(&[], "test", 1002), None);
+        let mut second = candidate.clone(); second["turnId"] = json!(other);
+        let mut ambiguous = snapshot(candidate);
+        ambiguous["params"]["change"]["conversationState"]["turns"] = json!([second]);
+        state.apply(&ambiguous).unwrap();
+        assert_eq!(state.matching_delivery(&[], "test", 1000), None);
+    }
+    #[test]
+    #[ignore = "requires explicit read-only target, input and send time"]
+    fn live_read_only_delivery_confirmation() {
+        let task = std::env::var("VOXQUEUE_CONFIRM_TASK").unwrap();
+        let prompt = std::env::var("VOXQUEUE_CONFIRM_INPUT").unwrap();
+        let sent_at: u64 = std::env::var("VOXQUEUE_CONFIRM_TIME").unwrap().parse().unwrap();
+        let expected = std::env::var("VOXQUEUE_CONFIRM_TURN").unwrap();
+        let cancel = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut subscription = Subscription::connect(&task, &cancel, deadline).unwrap();
+        while subscription.state.revision.is_none() { subscription.poll(&cancel, deadline).unwrap(); }
+        assert_eq!(subscription.state.matching_delivery(&[], &prompt, sent_at).as_deref(), Some(expected.as_str()));
+        assert_eq!(subscription.state.outcome(&expected), Some(true));
+        println!("Existing completed turn verified through read-only notifications");
+    }
     const TASK: &str = "01a10bd2-6774-7c40-ad12-238d9b5df18c";
     fn event(change: Value) -> Value {
         json!({"type":"broadcast","method":"thread-stream-state-changed","version":11,
