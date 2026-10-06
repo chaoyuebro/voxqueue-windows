@@ -102,7 +102,7 @@ int main() {
     HeartbeatFlags flags{};
     flags.speaker_volume_level = level;
     ai_keyboard::encode_heartbeat(packet.data(), flags, 0, 7);
-    assert(packet[6] == level && packet[7] == 2);
+    assert(packet[6] == level && packet[7] == 3);
   }
   heartbeat_encodes_magic_flags_session_and_sequence();
   heartbeat_idle_flags_are_zero();

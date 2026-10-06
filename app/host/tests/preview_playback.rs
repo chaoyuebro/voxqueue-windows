@@ -22,7 +22,7 @@ fn run_preview(reject: bool) {
     socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let target = format!("127.0.0.1:{}", ingress.local_port());
     let mut heartbeat = [0u8; 80];
-    heartbeat[..4].copy_from_slice(b"EIHB"); heartbeat[4]=1; heartbeat[5]=2; heartbeat[6]=5; heartbeat[7]=2;
+    heartbeat[..4].copy_from_slice(b"EIHB"); heartbeat[4]=1; heartbeat[5]=2; heartbeat[6]=5; heartbeat[7]=3;
     heartbeat[20..24].copy_from_slice(b"EISD"); heartbeat[24]=1; heartbeat[25]=60; heartbeat[26]=2;
     let mut mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
     mac.update(b"EasyInput/EISD/v1"); mac.update(&heartbeat[..64]);
@@ -31,6 +31,7 @@ fn run_preview(reject: bool) {
     let mut buffer = [0u8; 2048]; socket.recv_from(&mut buffer).unwrap();
     let deadline = Instant::now()+Duration::from_secs(1);
     while !ingress.diagnostics().preview_supported && Instant::now()<deadline { std::thread::sleep(Duration::from_millis(5)); }
+    assert_eq!(ingress.diagnostics().keyboard_firmware_version.as_deref(), Some(easy_codex_host::lan_voice::CURRENT_FIRMWARE_VERSION));
     let pcm = vec![0u8; 9600];
     let encoded = audio::encode_tts_audio(&pcm).unwrap();
     let token = 0x8000_0123;
@@ -48,7 +49,7 @@ fn run_preview(reject: bool) {
     let (size, _) = socket.recv_from(&mut buffer).unwrap();
     let begin = decode_begin(&buffer[..size], &key).unwrap();
     assert_eq!(begin.identity.request_generation, token);
-    assert_eq!(ingress.diagnostics().preview_status, "streaming");
+    wait_status(&ingress, "streaming");
     if reject {
         socket.send_to(&encode_ack(PlaybackAck { identity: begin.identity, status: 0, next_offset: 0 }, &key), &target).unwrap();
         let (size, _) = socket.recv_from(&mut buffer).unwrap();

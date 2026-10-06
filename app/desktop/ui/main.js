@@ -150,6 +150,8 @@ function renderDashboard(snapshot) {
     }
   }
   const keyboardVolume = snapshot.lan?.keyboard_volume_percent;
+  requiredElement("#firmware-current-version").textContent = snapshot.lan?.keyboard_firmware_version
+    || (typeof keyboardVolume === "number" ? "未提供版本号（旧固件）" : "键盘未连接，等待上报");
   requiredElement("#keyboard-volume-percent").textContent = typeof keyboardVolume === "number"
     ? `${keyboardVolume}%` : "等待上报（键盘未连接或固件需更新）";
   elements.lanDiagnostics.textContent = snapshot.lan
@@ -344,6 +346,7 @@ async function refreshDashboard() {
   }
   const unavailable = presentDashboardFailure(probe.connection);
   requiredElement("#keyboard-volume-percent").textContent = "Host 离线";
+  requiredElement("#firmware-current-version").textContent = "Host 离线，无法读取";
   dashboard = null;
   if (previewInFlight) {
     previewInFlight = false;
@@ -495,6 +498,7 @@ async function loadFirmware() {
   try {
     currentFirmware = await window.__TAURI__.core.invoke("firmware_info");
     requiredElement("#firmware-name").textContent = currentFirmware.name;
+    requiredElement("#firmware-latest-version").textContent = currentFirmware.latest_version;
     requiredElement("#firmware-sha").textContent = currentFirmware.sha256;
     const images = requiredElement("#firmware-images");
     images.replaceChildren();

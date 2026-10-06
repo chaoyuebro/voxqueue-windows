@@ -60,6 +60,7 @@
  *     keyboard_volume_percent?: number | null,
  *     preview_supported?: boolean,
  *     preview_status?: string,
+ *     keyboard_firmware_version?: string | null,
  *     secret_file_present: boolean,
  *     secret_file_readable: boolean,
  *     auth_key_loaded: boolean,

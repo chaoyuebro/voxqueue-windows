@@ -1,3 +1,4 @@
+pub const CURRENT_FIRMWARE_VERSION: &str = "2026.10.06-r3";
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -281,6 +282,7 @@ struct LanVoiceDiagnostics {
     preview_supported: AtomicBool,
     preview_busy: Arc<AtomicBool>,
     preview_status: Arc<Mutex<String>>,
+    keyboard_firmware_version: Arc<Mutex<Option<(String, Instant)>>>,
     mailbox_sent: AtomicU64,
     mailbox_send_failed: AtomicU64,
     playback_received: AtomicU64,
@@ -317,6 +319,8 @@ pub struct LanVoiceDiagnosticsSnapshot {
     pub preview_busy: bool,
     #[serde(default)]
     pub preview_status: String,
+    #[serde(default)]
+    pub keyboard_firmware_version: Option<String>,
     pub mailbox_sent: u64,
     pub mailbox_send_failed: u64,
     pub playback_received: u64,
@@ -435,7 +439,10 @@ impl LanVoiceIngress {
                                     match playback.handle_heartbeat(packet, source, key, &socket) {
                                         HeartbeatResponse::Invalid => {}
                                         HeartbeatResponse::SendFailed(volume) => {
-                                            ingress_diagnostics.preview_supported.store(packet[7] == 2, Ordering::Relaxed);
+                                            ingress_diagnostics.preview_supported.store(matches!(packet[7], 2 | 3), Ordering::Relaxed);
+                                            if let Ok(mut version) = ingress_diagnostics.keyboard_firmware_version.lock() {
+                                                *version = (packet[7] == 3).then(|| (CURRENT_FIRMWARE_VERSION.to_owned(), Instant::now()));
+                                            }
                                     if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
                                                 *reading = volume.map(|level| (level * 10, Instant::now()));
                                             }
@@ -447,7 +454,10 @@ impl LanVoiceIngress {
                                                 .fetch_add(1, Ordering::Relaxed);
                                         }
                                         HeartbeatResponse::Sent(volume) => {
-                                            ingress_diagnostics.preview_supported.store(packet[7] == 2, Ordering::Relaxed);
+                                            ingress_diagnostics.preview_supported.store(matches!(packet[7], 2 | 3), Ordering::Relaxed);
+                                            if let Ok(mut version) = ingress_diagnostics.keyboard_firmware_version.lock() {
+                                                *version = (packet[7] == 3).then(|| (CURRENT_FIRMWARE_VERSION.to_owned(), Instant::now()));
+                                            }
                                     if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
                                                 *reading = volume.map(|level| (level * 10, Instant::now()));
                                             }
@@ -590,6 +600,8 @@ impl LanVoiceIngress {
                 .diagnostics
                 .heartbeat_authenticated
                 .load(Ordering::Relaxed),
+            keyboard_firmware_version: self.diagnostics.keyboard_firmware_version.lock().ok()
+                .and_then(|value| value.as_ref().filter(|(_, received)| received.elapsed() < Duration::from_secs(12)).map(|(version, _)| version.clone())),
             preview_busy: self.diagnostics.preview_busy.load(Ordering::Relaxed),
             preview_status: self.diagnostics.preview_status.lock().map(|status| status.clone()).unwrap_or_default(),
             preview_supported: self.diagnostics.preview_supported.load(Ordering::Relaxed),
@@ -898,7 +910,7 @@ impl ActiveLanPlayback {
             || packet[..4] != *b"EIHB"
             || packet[4] != 1
             || packet[5] & !0x03 != 0
-            || !(packet[6..8] == [0, 0] || (matches!(packet[7], 1 | 2) && packet[6] <= 10))
+            || !(packet[6..8] == [0, 0] || (matches!(packet[7], 1 | 2 | 3) && packet[6] <= 10))
             || packet[20..24] != *b"EISD"
             || packet[24] != 1
             || packet[25] != 60
@@ -931,8 +943,8 @@ impl ActiveLanPlayback {
         };
         debug_assert!(matches!(response.len(), MAILBOX_STATUS_BYTES | 36));
         match socket.send_to(&response, source) {
-            Ok(length) if length == response.len() => HeartbeatResponse::Sent((matches!(packet[7], 1 | 2)).then_some(packet[6])),
-            _ => HeartbeatResponse::SendFailed((matches!(packet[7], 1 | 2)).then_some(packet[6])),
+            Ok(length) if length == response.len() => HeartbeatResponse::Sent((matches!(packet[7], 1 | 2 | 3)).then_some(packet[6])),
+            _ => HeartbeatResponse::SendFailed((matches!(packet[7], 1 | 2 | 3)).then_some(packet[6])),
         }
     }
 

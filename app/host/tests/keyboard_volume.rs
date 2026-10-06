@@ -36,9 +36,14 @@ fn authenticated_udp_updates_volume_rejects_tampering_and_expires() {
         }
         assert_eq!(ingress.diagnostics().keyboard_volume_percent, Some(level * 10));
     }
+    assert!(ingress.diagnostics().keyboard_firmware_version.is_none());
+    socket.send_to(&packet(10, 3, &key), target).unwrap();
+    let mut reply = [0; 128]; socket.recv_from(&mut reply).unwrap();
+    std::thread::sleep(Duration::from_millis(60));
+    assert_eq!(ingress.diagnostics().keyboard_firmware_version.as_deref(), Some(easy_codex_host::lan_voice::CURRENT_FIRMWARE_VERSION));
     let count = ingress.diagnostics().heartbeat_authenticated;
     let mut altered = packet(5, 1, &key); altered[6] = 7;
-    for invalid in [altered, packet(11, 1, &key), packet(5, 3, &key)] {
+    for invalid in [altered, packet(11, 1, &key), packet(5, 4, &key)] {
         socket.send_to(&invalid, target).unwrap();
     }
     std::thread::sleep(Duration::from_millis(150));
@@ -46,6 +51,7 @@ fn authenticated_udp_updates_volume_rejects_tampering_and_expires() {
     assert_eq!(ingress.diagnostics().keyboard_volume_percent, Some(100));
     std::thread::sleep(Duration::from_secs(12));
     assert_eq!(ingress.diagnostics().keyboard_volume_percent, None);
+    assert!(ingress.diagnostics().keyboard_firmware_version.is_none());
     socket.send_to(&packet(6, 1, &key), target).unwrap();
     let mut reply = [0; 128]; socket.recv_from(&mut reply).unwrap();
     socket.send_to(&packet(0, 0, &key), target).unwrap();

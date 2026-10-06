@@ -27,7 +27,7 @@
 
 硬件试听仍需将新版固件写入实物键盘后验收；模拟 UDP 不能证明实物扬声器已经播出。当前固件没有远程进入 ROM 下载模式的接口，烧录需要实体开关或 BOOT 操作。
 
-新应用镜像：`firmware/releases/voice-preview-frame-fix-20261006.bin`，SHA-256 `5c6ac9b1c27e128cc63ad43b9e2f2f235c562a30437b3bc6a49d7ab0229bad62`。
+新应用镜像：`firmware/releases/version-reporting-r3-20261006.bin`，SHA-256 `61f08d4caf8d00eda9862a250f99abc2a4f2b58be8b6a6917a9f0c3a71bc633a`。
 
 本机软件与 Host 已自动更新，两个程序与三份资源逐项校验一致；Host health 返回 ready。只读状态确认当前实物仍上报旧版能力，`preview_supported=false`，仅有正常 HID 设备，尚不能执行新固件试听。未自动重发用户历史失败任务，未调用电脑 UI 自动化。
 

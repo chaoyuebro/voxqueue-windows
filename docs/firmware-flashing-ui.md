@@ -28,14 +28,14 @@ VoxQueue 分区表仅含一个 factory 应用，没有 otadata 或 OTA 应用入
 | --- | --- | --- |
 | 引导程序 | 0x0 | `be3abea605a6be7f04c2d0f4011bd90688f799a834a164cdc6a29b16c3324287` |
 | 分区表 | 0x8000 | `7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278` |
-| VoxQueue 应用 | 0x10000 | `5c6ac9b1c27e128cc63ad43b9e2f2f235c562a30437b3bc6a49d7ab0229bad62` |
+| VoxQueue 应用 | 0x10000 | `61f08d4caf8d00eda9862a250f99abc2a4f2b58be8b6a6917a9f0c3a71bc633a` |
 
 恢复包校验值：`3b35337d93a129aa19787b679962ebf917bd6c74f01f48b8e2a10c0d0939f389`。它包含三段镜像的地址与 SHA，页面确认的是整套恢复计划。
 
 Git 内保存固定发布镜像：
 - `firmware/releases/bootloader-20261005.bin`
 - `firmware/releases/partition-table-20261005.bin`
-- `firmware/releases/voice-preview-frame-fix-20261006.bin`
+- `firmware/releases/version-reporting-r3-20261006.bin`
 
 应用更新为音量上报与独立播报试听版本；引导程序和分区表沿用已验证的固定发布镜像。
 安装包携带镜像和官方 esptool 4.12.0 独立程序，用户无需安装 Python 或 ESP-IDF。
@@ -73,3 +73,7 @@ JavaScript 语法与 Git diff 检查通过。新增的官方固件→VoxQueue �
 ## 历史
 
 `29e6268` 首版页面仅写应用，已被本次完整恢复替代。
+
+## 版本显示
+
+固件烧录页显示“当前版本”与“最新版本”。当前版本来自认证心跳扩展 3（2026.10.06-r3），12 秒无有效上报即失效；旧版扩展 1/2 保留音量和试听兼容，但显示未提供版本号，不推断具体版本。最新版本指当前软件内置的恢复包，来自与 Host 版本解码一致的版本常量，不代表在线查询 GitHub。新固件每次发版须同步更新扩展版本及版本常量、恢复包镜像和校验值。
