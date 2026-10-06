@@ -29,6 +29,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("mailbox_sent={}", snapshot.lan.mailbox_sent);
     println!("audio_frames_accepted={}", snapshot.lan.audio_frames_accepted);
     println!("audio_ends_accepted={}", snapshot.lan.audio_ends_accepted);
+    println!("audio_ends_received={}", snapshot.lan.audio_ends_received);
+    println!("audio_ends_rejected={}", snapshot.lan.audio_ends_rejected);
+    println!("last_audio_end_error={:?}", snapshot.lan.last_audio_end_error);
     println!("captures_ready={}", snapshot.lan.captures_ready);
     println!("captures_rejected={}", snapshot.lan.captures_rejected);
     println!("audio_auth_rejected={}", snapshot.lan.audio_auth_rejected);

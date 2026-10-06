@@ -8,6 +8,27 @@ pub const BOOTLOADER_SHA: &str = "be3abea605a6be7f04c2d0f4011bd90688f799a834a164
 pub const PARTITION_SHA: &str = "7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278";
 pub const FIRMWARE_SHA: &str = "61f08d4caf8d00eda9862a250f99abc2a4f2b58be8b6a6917a9f0c3a71bc633a";
 
+// Every desktop feature must query the same Host, including MSIX cache installs.
+#[cfg(windows)]
+pub fn desktop_app_paths() -> Option<easy_codex_host::paths::AppPaths> {
+    resolve_desktop_app_paths(
+        std::env::current_exe().ok().as_deref(),
+        std::env::var_os("LOCALAPPDATA").as_deref().map(Path::new),
+    )
+}
+
+#[cfg(windows)]
+fn resolve_desktop_app_paths(exe: Option<&Path>, local: Option<&Path>) -> Option<easy_codex_host::paths::AppPaths> {
+    let install_local = exe.and_then(|exe| {
+        let install_dir = exe.parent()?;
+        let name = install_dir.file_name()?.to_string_lossy();
+        if ["Codex Keyboard", "easyinput", "VoxQueue"].iter().any(|candidate| name.eq_ignore_ascii_case(candidate)) {
+            install_dir.parent()
+        } else { None }
+    });
+    install_local.or(local).map(|root| easy_codex_host::paths::AppPaths::from_root(root.join(easy_codex_host::paths::APP_SUPPORT_DIRECTORY)))
+}
+
 #[derive(Clone, Serialize)]
 pub struct FirmwareInfo {
     pub latest_version: &'static str,
@@ -337,7 +358,7 @@ impl FirmwareFlasher {
     #[cfg(windows)]
     fn restore_configuration(&self) {
         self.finish("restoring", "正在等待键盘启动，通过 USB 自动恢复配网配置");
-        let paths=std::env::var_os("LOCALAPPDATA").map(|root|easy_codex_host::paths::AppPaths::from_root(PathBuf::from(root).join(easy_codex_host::paths::APP_SUPPORT_DIRECTORY)));
+        let paths=desktop_app_paths();
         let before=paths.as_ref().and_then(|paths|easy_codex_host::health::query_dashboard(&paths.runtime_directory.join(easy_codex_host::health::HEALTH_SOCKET_NAME)).ok()).map(|snapshot|snapshot.lan.heartbeat_authenticated).unwrap_or(0);
         let deadline=Instant::now()+Duration::from_secs(30);
         loop {
@@ -572,6 +593,17 @@ fn valid_port(port: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn recovery_and_dashboard_use_installed_host_even_when_environment_differs() {
+        let local = std::path::Path::new(r"C:\Users\test\AppData\Local");
+        let install = std::path::Path::new(r"C:\Users\test\AppData\Local\Packages\Codex\LocalCache\Local\VoxQueue\easy-codex-desktop.exe");
+        let paths = super::resolve_desktop_app_paths(Some(install), Some(local)).unwrap();
+        assert_eq!(paths.root, std::path::PathBuf::from(r"C:\Users\test\AppData\Local\Packages\Codex\LocalCache\Local\EasyCodexInput"));
+        let dev = std::path::Path::new(r"D:\repo\target\debug\easy-codex-desktop.exe");
+        assert_eq!(super::resolve_desktop_app_paths(Some(dev), Some(local)).unwrap().root, local.join("EasyCodexInput"));
+        assert!(super::resolve_desktop_app_paths(None, None).is_none());
+    }
     use super::*;
     #[test]
     fn progress_is_bounded_and_only_from_flash_lines() {

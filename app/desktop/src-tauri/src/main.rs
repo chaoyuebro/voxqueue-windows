@@ -34,28 +34,7 @@ enum DashboardProbe {
 fn app_paths() -> Option<AppPaths> {
     #[cfg(windows)]
     {
-        let install_local = std::env::current_exe().ok().and_then(|exe| {
-            let install_dir = exe.parent()?;
-            if !install_dir
-                .file_name()?
-                .to_string_lossy()
-                .eq_ignore_ascii_case("Codex Keyboard")
-                && !install_dir
-                    .file_name()?
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case("easyinput")
-                && !install_dir
-                    .file_name()?
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case("VoxQueue")
-            {
-                return None;
-            }
-            Some(install_dir.parent()?.to_path_buf())
-        });
-        install_local
-            .or_else(|| std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from))
-            .map(|local| AppPaths::from_root(local.join("EasyCodexInput")))
+        firmware_flash::desktop_app_paths()
     }
     #[cfg(not(windows))]
     {
