@@ -346,3 +346,14 @@ kbd {
 .retry-input { margin-top: 10px; }
 .failed-prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8em; overflow: auto; }
 .retry-input small { display: block; margin-top: 6px; color: var(--muted); }
+
+.connection-status { margin: 12px 4px 24px; font-size: 12px; color: #8c7769; }
+.connection-status p { margin: 10px 0; }
+.connection-status p::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: #aaa; }
+.connection-status p[data-connected="true"]::before { background: #599f70; }
+.slot-activity { font-size: 13px; font-weight: 600; margin: 12px 0 8px; color: #8c7769; }
+.slot-activity[data-tone="active"] { color: #bc5838; }
+.slot-activity[data-tone="error"] { color: #bf3e2b; }
+.slot-stages { display: flex; flex-wrap: wrap; gap: 5px; font-size: 10px; color: #8c7769; }
+.slot-stages span { padding: 3px 7px; border-radius: 4px; background: #f5f1ed; }
+.slot-stages span.active { background: #f5e0d6; color: #a64022; font-weight: 600; }

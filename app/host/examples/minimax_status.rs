@@ -8,6 +8,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot = easy_codex_host::health::query_dashboard(
         &paths.runtime_directory.join(easy_codex_host::health::HEALTH_SOCKET_NAME),
     )?;
+    println!("codex_running={}", snapshot.codex_running);
+    println!("codex_connected={}", snapshot.codex_connected);
+    println!("keyboard_connected={}", snapshot.lan.keyboard_connected);
     println!("provider_region={}", snapshot.provider.region);
     println!("configured={}", snapshot.provider.configured);
     println!("asr_model={}", snapshot.provider.asr_model);
@@ -33,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("prompts_delivered={}", snapshot.lan.prompts_delivered);
     println!("queue_inserted={}", snapshot.lan.queue_inserted);
     for slot in &snapshot.slots {
+        println!("slot_{}_activity={}", slot.slot, slot.activity_phase);
         println!("slot_{}_bound={}", slot.slot, slot.task_id.is_some());
         println!(
             "slot_{}_selectable={}",

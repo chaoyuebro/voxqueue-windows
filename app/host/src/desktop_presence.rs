@@ -80,3 +80,14 @@ mod tests {
         }
     }
 }
+
+/// Probe the desktop pipe without sending a prompt or initializing a client.
+#[cfg(windows)]
+pub fn ipc_available() -> bool {
+    #[link(name="kernel32")]
+    unsafe extern "system" { fn WaitNamedPipeW(name: *const u16, timeout: u32) -> i32; fn GetLastError() -> u32; }
+    let name: Vec<u16> = r"\\.\pipe\codex-ipc".encode_utf16().chain(Some(0)).collect();
+    unsafe { WaitNamedPipeW(name.as_ptr(), 1) != 0 || matches!(GetLastError(), 121 | 231) }
+}
+#[cfg(not(windows))]
+pub fn ipc_available() -> bool { false }

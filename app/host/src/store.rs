@@ -649,6 +649,11 @@ impl StateStore {
         )?)
     }
 
+    pub fn active_slot_job(&self, task: &str, generation: u64, slot: u8) -> Result<Option<(String, String)>, StoreError> {
+        Ok(self.connection.query_row("SELECT request_id,state FROM jobs WHERE task_id=?1 AND generation=?2 AND slot=?3 AND state IN ('queued','running') ORDER BY CASE state WHEN 'running' THEN 0 ELSE 1 END,sequence LIMIT 1",
+            params![task,to_i64(generation)?,slot], |row| Ok((row.get(0)?,row.get(1)?))).optional()?)
+    }
+
     pub fn latest_job_outcome(
         &self,
         task_id: &str,

@@ -202,6 +202,8 @@ pub struct DashboardSlot {
     pub failed_request_id: Option<String>,
     #[serde(default)]
     pub failed_prompt: Option<String>,
+    #[serde(default)]
+    pub activity_phase: String,
     pub latest_job_state: Option<String>,
     pub latest_job_failure: Option<String>,
     pub latest_job_updated_at: Option<i64>,
@@ -223,6 +225,10 @@ pub struct DashboardSnapshot {
     pub v: u8,
     #[serde(default)]
     pub prompt_backend: String,
+    #[serde(default)]
+    pub codex_running: bool,
+    #[serde(default)]
+    pub codex_connected: bool,
     pub tasks: Vec<DashboardTask>,
     pub slots: Vec<DashboardSlot>,
     pub provider: ProviderSnapshot,
@@ -417,14 +423,17 @@ impl HostDaemon {
                     &prompt.transcript,
                 ) {
                     Ok(EnqueueOutcome::Inserted) => {
+                        self.lan_voice.finish_prompt_activity(prompt.slot, &prompt.request_id, true);
                         self.lan_voice.note_queue_inserted();
                         eprintln!("lan_voice_enqueued slot={}", prompt.slot);
                     }
                     Ok(EnqueueOutcome::Replay) => {
+                        self.lan_voice.finish_prompt_activity(prompt.slot, &prompt.request_id, true);
                         self.lan_voice.note_queue_replayed();
                         eprintln!("lan_voice_replayed slot={}", prompt.slot);
                     }
                     Err(error) => {
+                        self.lan_voice.finish_prompt_activity(prompt.slot, &prompt.request_id, false);
                         self.lan_voice.note_queue_rejected();
                         eprintln!(
                             "lan_voice_enqueue_rejected slot={} error={error}",
@@ -793,9 +802,9 @@ fn process_control_request(
             let result = store.clear_slot_summary_queue(slot, expected_generation).map_err(|error| match error {
                 StoreError::BindingChanged => "stale_binding", _ => "state_failed",
             })
-                .and_then(|_| build_dashboard(store, catalog, lan,
+                .and_then(|_| { ingress.dismiss_failed_activity(slot); build_dashboard(store, catalog, ingress.diagnostics(),
                     #[cfg(all(any(target_os = "macos", windows), not(test)))]
-                    paths));
+                    paths) });
             let _ = reply.send(result);
         }
         ControlRequest::Dashboard { reply } => {
@@ -877,7 +886,27 @@ fn build_dashboard(
             binding.map(|binding| store.failed_input(&binding.task_id, binding.generation, slot))
                 .transpose().map_err(|_| "state_failed")?.flatten()
         } else { None };
+        let mut activity_phase = lan.slot_activity.get(&slot).filter(|phase| phase.as_str() != "idle").cloned().unwrap_or_default();
+        if activity_phase.is_empty() {
+            if let Some(binding) = binding {
+                if let Some((request, state)) = store.active_slot_job(&binding.task_id, binding.generation, slot).map_err(|_| "state_failed")? {
+                    activity_phase = "waiting_delivery".into();
+                    #[cfg(all(windows, not(test)))]
+                    if state == "running" && delivery_accepted(&paths.runtime_directory.join("desktop-delivery.sqlite3"), &request) {
+                        activity_phase = "executing".into();
+                    }
+                    #[cfg(any(not(windows), test))]
+                    let _ = (request, state);
+                } else if latest_job.as_ref().is_some_and(|job| job.0 == "failed") {
+                    activity_phase = "failed".into();
+                } else if store.pending_summary_completion_count(&binding.task_id).map_err(|_| "state_failed")? > 0 {
+                    activity_phase = "summarizing".into();
+                } else if unread.is_some() { activity_phase = "unread".into(); }
+                else { activity_phase = "idle".into(); }
+            } else { activity_phase = "unbound".into(); }
+        }
         slots.push(DashboardSlot {
+            activity_phase,
             failed_request_id: failed.as_ref().map(|input| input.0.clone()),
             failed_prompt: failed.map(|input| input.1),
             slot,
@@ -906,6 +935,8 @@ fn build_dashboard(
         .collect();
     Ok(DashboardSnapshot {
         v: HEALTH_PROTOCOL_VERSION,
+        codex_running: crate::desktop_presence::is_running(),
+        codex_connected: crate::desktop_presence::is_running() && crate::desktop_presence::ipc_available(),
         prompt_backend: if cfg!(windows) { "desktop" } else { "cli" }.to_owned(),
         tasks,
         slots,
@@ -2114,4 +2145,11 @@ pub fn retry_dashboard_input(socket_path: &Path, slot: u8, expected_generation: 
 
 pub fn preview_dashboard_audio(socket_path: &Path, id: String, token: u32) -> Result<DashboardSnapshot, HealthError> {
     query_host(socket_path, &HostRequest::PreviewAudio { v: HEALTH_PROTOCOL_VERSION, id, token })
+}
+
+#[cfg(all(windows, not(test)))]
+fn delivery_accepted(path: &Path, request: &str) -> bool {
+    let Ok(db) = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else { return false; };
+    let _ = db.busy_timeout(Duration::from_millis(10));
+    db.query_row("SELECT state FROM deliveries WHERE request_id=?1", [request], |row| row.get::<_, String>(0)).is_ok_and(|state| state == "accepted")
 }

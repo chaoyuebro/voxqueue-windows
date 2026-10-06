@@ -283,6 +283,8 @@ struct LanVoiceDiagnostics {
     preview_busy: Arc<AtomicBool>,
     preview_status: Arc<Mutex<String>>,
     keyboard_firmware_version: Arc<Mutex<Option<(String, Instant)>>>,
+    heartbeat_at: Mutex<Option<Instant>>,
+    slot_activity: crate::voice_activity::VoiceActivityTracker,
     mailbox_sent: AtomicU64,
     mailbox_send_failed: AtomicU64,
     playback_received: AtomicU64,
@@ -321,6 +323,10 @@ pub struct LanVoiceDiagnosticsSnapshot {
     pub preview_status: String,
     #[serde(default)]
     pub keyboard_firmware_version: Option<String>,
+    #[serde(default)]
+    pub keyboard_connected: bool,
+    #[serde(default)]
+    pub slot_activity: BTreeMap<u8, String>,
     pub mailbox_sent: u64,
     pub mailbox_send_failed: u64,
     pub playback_received: u64,
@@ -340,13 +346,18 @@ pub struct LanVoiceDiagnosticsSnapshot {
     pub queue_rejected: u64,
 }
 
+impl LanVoiceDiagnostics {
+    fn recording(&self, slot: u8, session: u64) { self.slot_activity.recording(slot, session); }
+    fn transition(&self, slot: u8, session: u64, phase: &str) { self.slot_activity.transition(slot, session, phase); }
+}
+
 impl LanVoiceIngress {
     pub fn start(config: LanVoiceConfig) -> Result<Self, LanVoiceError> {
         let socket = UdpSocket::bind(("0.0.0.0", config.bind_port))?;
         socket.set_read_timeout(Some(RECEIVE_POLL))?;
         let local_port = socket.local_addr()?.port();
         let (prompt_sender, receiver) = mpsc::channel();
-        let (capture_sender, capture_receiver) = mpsc::sync_channel(MAX_ACTIVE_CAPTURES);
+        let (capture_sender, capture_receiver) = mpsc::sync_channel::<CompletedCapture>(MAX_ACTIVE_CAPTURES);
         let (playback_event_sender, playback_events) = mpsc::channel();
         let (playback_commands, playback_command_receiver) = mpsc::channel();
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -371,8 +382,13 @@ impl LanVoiceIngress {
                 let transcriber = HybridTranscriber::new(config.dashscope_env, config.whisper);
                 while !asr_shutdown.load(Ordering::Acquire) {
                     match capture_receiver.recv_timeout(RECEIVE_POLL) {
-                        Ok(capture) => match transcriber.transcribe(capture) {
+                        Ok(capture) => {
+                            let slot = capture.identity.slot;
+                            let session = capture.session_id;
+                            asr_diagnostics.transition(slot, session, "recognizing");
+                            match transcriber.transcribe(capture) {
                             Ok(prompt) => {
+                                asr_diagnostics.transition(slot, session, "waiting_delivery");
                                 asr_diagnostics
                                     .asr_succeeded
                                     .fetch_add(1, Ordering::Relaxed);
@@ -384,10 +400,11 @@ impl LanVoiceIngress {
                                     .fetch_add(1, Ordering::Relaxed);
                             }
                             Err(error) => {
+                                asr_diagnostics.transition(slot, session, "recognition_failed");
                                 asr_diagnostics.asr_failed.fetch_add(1, Ordering::Relaxed);
                                 eprintln!("lan_voice_rejected={}", error_code(&error));
                             }
-                        },
+                        }},
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                         Err(mpsc::RecvTimeoutError::Disconnected) => return,
                     }
@@ -439,6 +456,7 @@ impl LanVoiceIngress {
                                     match playback.handle_heartbeat(packet, source, key, &socket) {
                                         HeartbeatResponse::Invalid => {}
                                         HeartbeatResponse::SendFailed(volume) => {
+                                            if let Ok(mut at) = ingress_diagnostics.heartbeat_at.lock() { *at = Some(Instant::now()); }
                                             ingress_diagnostics.preview_supported.store(matches!(packet[7], 2 | 3), Ordering::Relaxed);
                                             if let Ok(mut version) = ingress_diagnostics.keyboard_firmware_version.lock() {
                                                 *version = (packet[7] == 3).then(|| (CURRENT_FIRMWARE_VERSION.to_owned(), Instant::now()));
@@ -454,6 +472,7 @@ impl LanVoiceIngress {
                                                 .fetch_add(1, Ordering::Relaxed);
                                         }
                                         HeartbeatResponse::Sent(volume) => {
+                                            if let Ok(mut at) = ingress_diagnostics.heartbeat_at.lock() { *at = Some(Instant::now()); }
                                             ingress_diagnostics.preview_supported.store(matches!(packet[7], 2 | 3), Ordering::Relaxed);
                                             if let Ok(mut version) = ingress_diagnostics.keyboard_firmware_version.lock() {
                                                 *version = (packet[7] == 3).then(|| (CURRENT_FIRMWARE_VERSION.to_owned(), Instant::now()));
@@ -497,6 +516,10 @@ impl LanVoiceIngress {
                                 match assembler.ingest(packet, source, Instant::now()) {
                                     Ok(()) => {
                                         if packet.starts_with(b"EIAU") {
+                                            let session = u64::from_le_bytes(packet[8..16].try_into().unwrap());
+                                            if let Ok(identity) = decode_capture_session_identity(session) {
+                                                ingress_diagnostics.recording(identity.slot, session);
+                                            }
                                             ingress_diagnostics
                                                 .audio_frames_accepted
                                                 .fetch_add(1, Ordering::Relaxed);
@@ -538,20 +561,25 @@ impl LanVoiceIngress {
                     }
                     for capture in assembler.take_ready() {
                         match capture {
-                            Ok(capture) => match capture_sender.try_send(capture) {
+                            Ok(capture) => {
+                                let slot = capture.identity.slot;
+                                let session = capture.session_id;
+                                ingress_diagnostics.transition(slot, session, "recognizing");
+                                match capture_sender.try_send(capture) {
                                 Ok(()) => {
                                     ingress_diagnostics
                                         .captures_ready
                                         .fetch_add(1, Ordering::Relaxed);
                                 }
                                 Err(TrySendError::Full(_)) => {
+                                    ingress_diagnostics.transition(slot, session, "recognition_failed");
                                     ingress_diagnostics
                                         .captures_rejected
                                         .fetch_add(1, Ordering::Relaxed);
                                     eprintln!("lan_voice_rejected=capture_queue_full");
                                 }
                                 Err(TrySendError::Disconnected(_)) => return,
-                            },
+                            }},
                             Err(error) => {
                                 ingress_diagnostics
                                     .captures_rejected
@@ -566,6 +594,7 @@ impl LanVoiceIngress {
                             .fetch_add(1, Ordering::Relaxed);
                         eprintln!("lan_voice_rejected={}", error_code(&error));
                     }
+                    ingress_diagnostics.slot_activity.expire_recordings(&assembler.active.keys().copied().collect::<Vec<_>>());
                     playback.tick(&socket, assembler.auth_key.as_ref(), &playback_event_sender);
                 }
             }) {
@@ -600,6 +629,8 @@ impl LanVoiceIngress {
                 .diagnostics
                 .heartbeat_authenticated
                 .load(Ordering::Relaxed),
+            keyboard_connected: self.diagnostics.heartbeat_at.lock().ok().and_then(|at| *at).is_some_and(|at| at.elapsed() < Duration::from_secs(12)),
+            slot_activity: self.diagnostics.slot_activity.snapshot(),
             keyboard_firmware_version: self.diagnostics.keyboard_firmware_version.lock().ok()
                 .and_then(|value| value.as_ref().filter(|(_, received)| received.elapsed() < Duration::from_secs(12)).map(|(version, _)| version.clone())),
             preview_busy: self.diagnostics.preview_busy.load(Ordering::Relaxed),
@@ -654,6 +685,14 @@ impl LanVoiceIngress {
         self.diagnostics
             .queue_rejected
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn dismiss_failed_activity(&self, slot: u8) { self.diagnostics.slot_activity.dismiss_failed(slot); }
+
+    pub fn finish_prompt_activity(&self, slot: u8, request: &str, accepted: bool) {
+        if let Some(session) = request.strip_prefix("lan-").and_then(|value| u64::from_str_radix(value, 16).ok()) {
+            self.diagnostics.transition(slot, session, if accepted { "idle" } else { "delivery_failed" });
+        }
     }
 
     pub fn try_recv(&self) -> Option<LanVoicePrompt> {

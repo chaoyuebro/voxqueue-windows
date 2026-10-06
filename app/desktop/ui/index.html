@@ -41,6 +41,11 @@
             </div>
           </section>
 
+          <section class="connection-status" aria-label="连接状态" aria-live="polite">
+            <p id="keyboard-connection">键盘检测中</p>
+            <p id="codex-connection">Codex 检测中</p>
+          </section>
+
           <section class="provider-band" aria-labelledby="provider-title">
             <div class="provider-heading"><span id="provider-dot" class="provider-dot"></span><h2 id="provider-title">语音服务</h2></div>
             <p id="provider-state" class="provider-state">检测中</p>
@@ -173,6 +178,8 @@
             </button>
           </div>
         </div>
+        <p class="slot-activity" aria-live="polite"></p>
+        <div class="slot-stages" aria-label="任务阶段"><span data-stage="recording">录音</span><span data-stage="recognizing">识别</span><span data-stage="waiting_delivery">投递</span><span data-stage="executing">执行</span><span data-stage="summarizing">总结</span><span data-stage="unread">待听</span></div>
         <p class="slot-meta"></p>
         <div class="retry-input" hidden>
           <p class="failed-prompt"></p>

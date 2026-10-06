@@ -1,4 +1,6 @@
 import {
+  presentActivity,
+  presentConnections,
   presentDashboardFailure,
   presentProbe,
   presentSlotStatus,
@@ -128,6 +130,7 @@ function slotSnapshot(slot) {
 
 /** @param {import("./view-model.js").DashboardSnapshot} snapshot */
 function renderDashboard(snapshot) {
+  renderConnections(snapshot);
   dashboard = snapshot;
   const tasks = sortedTasks(snapshot.tasks.filter((task) => !task.cli_created));
   elements.taskCount.textContent = `${tasks.length} 个任务`;
@@ -270,6 +273,13 @@ function renderDashboard(snapshot) {
       childElement(row, ".open-button")
     ).disabled = !selected;
     const selectedTask = tasks.find((task) => task.task_id === selected);
+    const activity = presentActivity(slot);
+    const activityLabel = childElement(row, ".slot-activity");
+    activityLabel.textContent = activity.label;
+    activityLabel.dataset.tone = activity.tone;
+    for (const step of row.querySelectorAll("[data-stage]")) {
+      step.classList.toggle("active", step.getAttribute("data-stage") === activity.phase);
+    }
     const status = presentSlotStatus(slot);
     childElement(row, ".slot-meta").textContent = snapshot.prompt_backend === "desktop"
       ? `${status} · 语音投递到 Codex 桌面`
@@ -348,6 +358,9 @@ async function refreshDashboard() {
   requiredElement("#keyboard-volume-percent").textContent = "Host 离线";
   requiredElement("#firmware-current-version").textContent = "Host 离线，无法读取";
   dashboard = null;
+  renderConnections(null);
+  for (const label of elements.slots.querySelectorAll(".slot-activity")) { label.textContent = "Host 离线，进度不可用"; label.dataset.tone = "idle"; }
+  for (const step of elements.slots.querySelectorAll("[data-stage]")) step.classList.remove("active");
   if (previewInFlight) {
     previewInFlight = false;
     requiredElement("#answer-voice-preview").disabled = false;
@@ -589,3 +602,11 @@ answerVoiceUI.preview.addEventListener("click", async () => {
   } catch (error) { previewInFlight = false; answerVoiceUI.status.textContent = `试听失败：${String(error)}`; }
   finally { answerVoiceUI.preview.disabled = previewInFlight; }
 });
+
+function renderConnections(snapshot) {
+  const status = presentConnections(snapshot);
+  requiredElement("#keyboard-connection").textContent = status.keyboard;
+  requiredElement("#keyboard-connection").dataset.connected = String(Boolean(snapshot?.lan.keyboard_connected));
+  requiredElement("#codex-connection").textContent = status.codex;
+  requiredElement("#codex-connection").dataset.connected = String(Boolean(snapshot?.codex_connected));
+}

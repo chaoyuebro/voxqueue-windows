@@ -46,6 +46,7 @@
  *   unread_coverage: number | null,
  *   failed_request_id?: string | null,
  *   failed_prompt?: string | null,
+ *   activity_phase?: string,
  *   latest_job_state: string | null,
  *   latest_job_failure: string | null,
  *   latest_job_updated_at: number | null
@@ -54,10 +55,14 @@
  * @typedef {{
  *   v: number,
  *   prompt_backend?: string,
+ *   codex_running?: boolean,
+ *   codex_connected?: boolean,
  *   tasks: DashboardTask[],
  *   slots: DashboardSlot[],
  *   lan: {
  *     keyboard_volume_percent?: number | null,
+ *     keyboard_connected?: boolean,
+ *     slot_activity?: Record<string, string>,
  *     preview_supported?: boolean,
  *     preview_status?: string,
  *     keyboard_firmware_version?: string | null,
@@ -181,4 +186,16 @@ export function presentDashboardFailure(connection) {
     ttsModel: "--",
     voice: "--",
   };
+}
+
+/** @param {DashboardSlot} slot */
+export function presentActivity(slot) {
+  const phase = slot.activity_phase || "idle";
+  const labels = { recording: "录音中", recognizing: "识别中", waiting_delivery: "等待投递", executing: "执行中", summarizing: "正在生成总结", unread: "总结待听", failed: "任务失败", recording_failed: "录音未完成", recognition_failed: "识别失败", delivery_failed: "投递未入队", unbound: "未绑定", idle: "空闲" };
+  return { phase, label: labels[phase] || "状态待确认", tone: phase.includes("failed") ? "error" : ["idle", "unbound"].includes(phase) ? "idle" : "active" };
+}
+/** @param {DashboardSnapshot | null} snapshot */
+export function presentConnections(snapshot) {
+  return { keyboard: snapshot ? (snapshot.lan.keyboard_connected ? "键盘已连接" : "键盘未连接") : "键盘状态不可用",
+    codex: snapshot ? (snapshot.codex_connected ? "Codex 已连接" : snapshot.codex_running ? "Codex 已启动，接口未就绪" : "Codex 未启动") : "Codex 状态不可用" };
 }

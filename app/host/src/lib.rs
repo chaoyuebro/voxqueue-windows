@@ -40,3 +40,5 @@ pub mod windows_credential;
 pub mod windows_job;
 #[cfg(windows)]
 pub mod windows_paths;
+
+pub mod voice_activity;
