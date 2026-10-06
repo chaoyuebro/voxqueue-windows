@@ -11,7 +11,7 @@ use std::thread;
 #[cfg(any(target_os = "macos", windows))]
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use thiserror::Error;
 use zeroize::Zeroize;
 
@@ -74,11 +74,16 @@ pub enum ProvisioningError {
     HidWrite,
     #[error("AI keyboard did not return the exact saved configuration ACK")]
     HidAck,
+    #[error("saved recovery configuration is missing or invalid") ]
+    RecoveryProfile,
+    #[error("multiple keyboards connected; connect only the keyboard to recover")]
+    MultipleDevices,
     #[error("HID provisioning is unavailable on this platform")]
     UnsupportedPlatform,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LanProvisioning {
     ssid: String,
     password: String,
@@ -319,7 +324,10 @@ pub fn load_or_create_device_secret(paths: &AppPaths) -> Result<[u8; 32], Provis
 pub fn provision_lan(config: &LanProvisioning) -> Result<ProvisioningReceipt, ProvisioningError> {
     #[cfg(any(target_os = "macos", windows))]
     {
-        provision_lan_hid(config)
+        let receipt = provision_lan_hid(config)?;
+        #[cfg(windows)]
+        save_recovery_profile(config)?;
+        Ok(receipt)
     }
     #[cfg(not(any(target_os = "macos", windows)))]
     {
@@ -347,6 +355,7 @@ fn provision_lan_hid(config: &LanProvisioning) -> Result<ProvisioningReceipt, Pr
             )
         })
         .collect::<Vec<_>>();
+    if candidates.len() > 1 { return Err(ProvisioningError::MultipleDevices); }
     if candidates.is_empty() {
         return Err(ProvisioningError::DeviceNotFound);
     }
@@ -739,4 +748,52 @@ mod tests {
         );
         assert_eq!(fs::read(&target).unwrap(), b"do-not-touch");
     }
+}
+
+impl Drop for LanProvisioning {
+    fn drop(&mut self) { self.password.zeroize(); self.device_secret.zeroize(); }
+}
+#[cfg(windows)]
+pub fn save_recovery_profile(config: &LanProvisioning) -> Result<(), ProvisioningError> {
+    let bytes = zeroize::Zeroizing::new(serde_json::to_vec(config).map_err(|_|ProvisioningError::RecoveryProfile)?);
+    crate::windows_credential::store_lan_recovery(&bytes).map_err(|_|ProvisioningError::RecoveryProfile)
+}
+#[cfg(windows)]
+pub fn load_recovery_profile() -> Result<LanProvisioning, ProvisioningError> {
+    let bytes = crate::windows_credential::read_lan_recovery().map_err(|_|ProvisioningError::RecoveryProfile)?.ok_or(ProvisioningError::RecoveryProfile)?;
+    decode_recovery_profile(&bytes)
+}
+pub fn decode_recovery_profile(bytes: &[u8]) -> Result<LanProvisioning, ProvisioningError> {
+    let config: LanProvisioning = serde_json::from_slice(bytes).map_err(|_|ProvisioningError::RecoveryProfile)?;
+    LanProvisioning::new(config.ssid.clone(),config.password.clone(),IpAddr::V4(config.host),config.port,config.device_secret)
+}
+#[cfg(windows)]
+pub fn restore_saved_lan() -> Result<ProvisioningReceipt, ProvisioningError> {
+    let mut config = load_recovery_profile()?;
+    // UDP connect chooses the interface without transmitting credentials or packets.
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect((config.host,config.port)).is_ok() {
+            if let Ok(address) = socket.local_addr() {
+                if let IpAddr::V4(ip) = address.ip() {
+                    if !ip.is_unspecified() && !ip.is_loopback() && !ip.is_link_local() { config.host=ip; }
+                }
+            }
+        }
+    }
+    provision_lan(&config)
+}
+
+#[cfg(windows)]
+pub fn recovery_network_settings() -> Option<(String, String)> {
+    load_recovery_profile().ok().map(|config|(config.ssid.clone(),config.host.to_string()))
+}
+#[cfg(windows)]
+pub fn save_recovery_settings(ssid:String, mut password:String, host:IpAddr, secret:[u8;32]) -> Result<(), ProvisioningError> {
+    if password.is_empty() {
+        if let Ok(previous)=load_recovery_profile() {
+            if previous.ssid==ssid { password=previous.password.clone(); }
+        }
+    }
+    let config=LanProvisioning::new(ssid,password,host,crate::lan_voice::LAN_AUDIO_PORT,secret)?;
+    save_recovery_profile(&config)
 }

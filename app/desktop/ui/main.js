@@ -468,18 +468,20 @@ for (const link of document.querySelectorAll("[data-page]")) {
 
 function renderFlash(snapshot) {
   flashPhase = snapshot.phase || "";
-  const busy = flashPhase === "waiting" || flashPhase === "flashing";
-  firmwareUI.start.disabled = busy || !currentFirmware?.available;
+  const busy = ["waiting", "flashing", "restoring", "connecting"].includes(flashPhase);
+  firmwareUI.start.disabled = busy || !currentFirmware?.available || !currentFirmware?.recovery_configured;
+  requiredElement("#restore-network").disabled = busy || !currentFirmware?.recovery_configured;
+  requiredElement("#recovery-settings-save").disabled = busy;
   firmwareUI.start.textContent = busy ? "恢复进行中…" : "开始恢复";
   firmwareUI.cancel.hidden = flashPhase !== "waiting";
   firmwareUI.cancel.disabled = false;
   firmwareUI.status.textContent = snapshot.message || (currentFirmware?.available ? "完整恢复包已就绪" : "当前安装缺少恢复镜像或烧录工具");
   firmwareUI.status.dataset.phase = flashPhase;
-  firmwareUI.progress.hidden = flashPhase !== "flashing" && flashPhase !== "completed";
+  firmwareUI.progress.hidden = !["flashing", "restoring", "connecting", "completed"].includes(flashPhase);
   if (snapshot.progress == null) firmwareUI.progress.removeAttribute("value");
   else firmwareUI.progress.value = snapshot.progress;
   firmwareUI.log.textContent = snapshot.log?.join("\n") || "尚未开始";
-  if (flashPhase === "failed") requiredElement("#flash-log-details").open = true;
+  if (["failed", "configuration_failed"].includes(flashPhase)) requiredElement("#flash-log-details").open = true;
 }
 
 async function pollFlash() {
@@ -520,6 +522,9 @@ firmwareUI.cancel.addEventListener("click", async () => {
 async function loadFirmware() {
   try {
     currentFirmware = await window.__TAURI__.core.invoke("firmware_info");
+    requiredElement("#recovery-config-status").textContent = currentFirmware.recovery_configured ? "已保存配网恢复配置，烧录后将自动写回键盘" : "请先填写并保存配网恢复设置";
+    requiredElement("#recovery-ssid").value = currentFirmware.recovery_ssid || "";
+    requiredElement("#recovery-host").value = currentFirmware.recovery_host || "";
     requiredElement("#firmware-name").textContent = currentFirmware.name;
     requiredElement("#firmware-latest-version").textContent = currentFirmware.latest_version;
     requiredElement("#firmware-sha").textContent = currentFirmware.sha256;
@@ -538,7 +543,7 @@ async function loadFirmware() {
 showWorkspacePage("overview");
 void loadFirmware();
 window.setInterval(() => {
-  if (!firmwareUI.panel.hidden || flashPhase === "waiting" || flashPhase === "flashing") void pollFlash();
+  if (!firmwareUI.panel.hidden || ["waiting", "flashing", "restoring", "connecting"].includes(flashPhase)) void pollFlash();
 }, 750);
 
 const answerVoiceUI = {
@@ -627,3 +632,20 @@ for (const button of document.querySelectorAll("[data-overview-slot]")) {
     showWorkspacePage("slots");
   });
 }
+
+requiredElement("#restore-network").addEventListener("click", async () => {
+  requiredElement("#restore-network").disabled = true;
+  try { renderFlash(await window.__TAURI__.core.invoke("restore_keyboard_configuration")); }
+  catch (error) { await pollFlash(); firmwareUI.status.textContent = String(error); }
+});
+requiredElement("#recovery-settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button=requiredElement("#recovery-settings-save"); button.disabled=true;
+  try {
+    await window.__TAURI__.core.invoke("save_keyboard_recovery", {ssid:requiredElement("#recovery-ssid").value, password:requiredElement("#recovery-password").value,host:requiredElement("#recovery-host").value});
+    requiredElement("#recovery-password").value="";
+    requiredElement("#recovery-settings-result").textContent="已保存，后续烧录自动恢复配网";
+    await loadFirmware();
+  } catch(error) { requiredElement("#recovery-settings-result").textContent=String(error); }
+  finally { button.disabled=false; }
+});

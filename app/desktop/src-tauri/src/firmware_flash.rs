@@ -15,6 +15,9 @@ pub struct FirmwareInfo {
     pub sha256: String,
     pub images: Vec<RestoreImage>,
     pub available: bool,
+    pub recovery_configured: bool,
+    pub recovery_ssid: Option<String>,
+    pub recovery_host: Option<String>,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -62,6 +65,9 @@ fn restore_sha() -> String {
 
 pub fn info(resources: &Path) -> FirmwareInfo {
     FirmwareInfo {
+        recovery_configured: recovery_configured(),
+        recovery_ssid: recovery_network().map(|network|network.0),
+        recovery_host: recovery_network().map(|network|network.1),
         latest_version: easy_codex_host::lan_voice::CURRENT_FIRMWARE_VERSION,
         name: "2026.10.06 · 版本上报与播报试听 · VoxQueue 完整恢复包",
         sha256: restore_sha(),
@@ -128,7 +134,7 @@ impl FirmwareFlasher {
     }
 
     pub fn busy(&self) -> bool {
-        matches!(self.snapshot().phase.as_str(), "waiting" | "flashing")
+        matches!(self.snapshot().phase.as_str(), "waiting" | "flashing" | "restoring" | "connecting")
     }
 
     pub fn cancel_wait(&self) -> Result<(), String> {
@@ -145,11 +151,13 @@ impl FirmwareFlasher {
             return Err("当前烧录功能支持 Windows".into());
         }
         validate_restore(&resources, &reviewed_sha)?;
+        #[cfg(all(windows, not(test)))]
+        if !recovery_configured() { return Err("请先保存配网恢复配置，再开始完整恢复".into()); }
         if !resources.join("esptool/esptool.exe").is_file() {
             return Err("安装包缺少烧录工具，请重新安装 VoxQueue".into());
         }
         let mut state = self.0.lock().unwrap();
-        if matches!(state.snapshot.phase.as_str(), "waiting" | "flashing") {
+        if matches!(state.snapshot.phase.as_str(), "waiting" | "flashing" | "restoring" | "connecting") {
             return Err("已有烧录操作，请等待它结束".into());
         }
         state.cancelled = false;
@@ -312,12 +320,51 @@ impl FirmwareFlasher {
             return Err("完整恢复未完成：需要三份镜像全部校验通过，请查看下方日志".into());
         }
         self.0.lock().unwrap().snapshot.progress = Some(100);
-        self.finish(
-            "completed",
-            "完整恢复成功，三份镜像写入校验通过。键盘已自动重启，配网和声音资源保留。",
-        );
+        self.append_log("固件三段写入完成，正在自动恢复配网配置。".into());
+        self.restore_configuration();
         Ok(())
     }
+
+    pub fn retry_configuration(&self) -> Result<FlashSnapshot, String> {
+        if !recovery_configured() { return Err("请先保存配网恢复配置".into()); }
+        let mut state = self.0.lock().unwrap();
+        if matches!(state.snapshot.phase.as_str(), "waiting" | "flashing" | "restoring" | "connecting") { return Err("恢复正在进行，请等待".into()); }
+        state.snapshot.phase="restoring".into(); state.snapshot.message="正在恢复配网配置，请保持 USB 连接".into();
+        let snapshot=state.snapshot.clone(); drop(state);
+        let worker=self.clone(); std::thread::spawn(move ||worker.restore_configuration());
+        Ok(snapshot)
+    }
+    #[cfg(windows)]
+    fn restore_configuration(&self) {
+        self.finish("restoring", "正在等待键盘启动，通过 USB 自动恢复配网配置");
+        let paths=std::env::var_os("LOCALAPPDATA").map(|root|easy_codex_host::paths::AppPaths::from_root(PathBuf::from(root).join(easy_codex_host::paths::APP_SUPPORT_DIRECTORY)));
+        let before=paths.as_ref().and_then(|paths|easy_codex_host::health::query_dashboard(&paths.runtime_directory.join(easy_codex_host::health::HEALTH_SOCKET_NAME)).ok()).map(|snapshot|snapshot.lan.heartbeat_authenticated).unwrap_or(0);
+        let deadline=Instant::now()+Duration::from_secs(30);
+        loop {
+            match easy_codex_host::provisioning::restore_saved_lan() {
+                Ok(_) => break,
+                Err(easy_codex_host::provisioning::ProvisioningError::DeviceNotFound) if Instant::now()<deadline => std::thread::sleep(Duration::from_millis(500)),
+                Err(_) => { self.finish("configuration_failed", "固件未受影响，但配网恢复未完成。请连接一块键盘后点击恢复配网"); return; }
+            }
+        }
+        self.append_log("USB 已确认配置保存成功，正在检查键盘心跳。".into());
+        self.finish("connecting", "配网已恢复，正在等待键盘连接 Host");
+
+        let deadline=Instant::now()+Duration::from_secs(30);
+        while Instant::now()<deadline {
+            if let Some(paths)=&paths {
+                if let Ok(snapshot)=easy_codex_host::health::query_dashboard(&paths.runtime_directory.join(easy_codex_host::health::HEALTH_SOCKET_NAME)) {
+                    if snapshot.lan.heartbeat_authenticated > before && snapshot.lan.keyboard_connected && snapshot.lan.keyboard_firmware_version.as_deref()==Some(easy_codex_host::lan_voice::CURRENT_FIRMWARE_VERSION) {
+                        self.finish("completed", "恢复完成：配网已自动写回，键盘已连接，版本上报正常"); return;
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        self.finish("configuration_failed", "配置已保存，但键盘尚未连接。请检查 Wi-Fi 后点击恢复配网；无需重烧固件");
+    }
+    #[cfg(not(windows))]
+    fn restore_configuration(&self) { self.finish("configuration_failed", "自动配网恢复仅支持 Windows"); }
 
     #[cfg(not(windows))]
     fn run(&self, _: &Path) -> Result<(), String> {
@@ -625,6 +672,11 @@ mod tests {
         flasher.0.lock().unwrap().snapshot.phase = "flashing".into();
         assert!(flasher.cancel_wait().is_err());
         assert!(flasher.busy());
+        for phase in ["restoring", "connecting"] {
+            flasher.0.lock().unwrap().snapshot.phase=phase.into();
+            assert!(flasher.busy());
+            assert!(flasher.cancel_wait().is_err());
+        }
         for i in 0..500 {
             flasher.append_log(i.to_string());
         }
@@ -637,4 +689,14 @@ mod tests {
             assert!(!valid_port(port));
         }
     }
+}
+
+fn recovery_configured() -> bool {
+    #[cfg(windows)] { easy_codex_host::provisioning::load_recovery_profile().is_ok() }
+    #[cfg(not(windows))] { false }
+}
+
+fn recovery_network() -> Option<(String,String)> {
+    #[cfg(windows)] { easy_codex_host::provisioning::recovery_network_settings() }
+    #[cfg(not(windows))] { None }
 }

@@ -280,7 +280,9 @@ fn main() {
             firmware_info,
             firmware_flash_status,
             start_firmware_flash,
-            cancel_firmware_flash
+            cancel_firmware_flash,
+            restore_keyboard_configuration,
+            save_keyboard_recovery
         ])
         .run(tauri::generate_context!())
         .expect("VoxQueue desktop runtime failed");
@@ -395,4 +397,21 @@ async fn preview_answer_voice(settings: easy_codex_host::voice_settings::VoiceSe
         result.map_err(|e| e.to_string())?;
         Ok("试听已准备，键盘将在空闲时播放（等待最多 30 秒）；可用旋钮调节音量".into())
     }).await.map_err(|e| e.to_string())?
+}
+
+#[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
+fn restore_keyboard_configuration(state: tauri::State<'_,firmware_flash::FirmwareFlasher>) -> Result<firmware_flash::FlashSnapshot,String> {
+    state.retry_configuration()
+}
+#[cfg(any(target_os = "macos", windows))]
+#[tauri::command]
+fn save_keyboard_recovery(state: tauri::State<'_,firmware_flash::FirmwareFlasher>, ssid:String, password:String, host:String) -> Result<(),String> {
+    if state.busy() { return Err("恢复进行中，请等待结束再修改配网".into()); }
+    #[cfg(windows)] {
+        let paths=app_paths().ok_or("数据目录不可用")?;
+        let secret=easy_codex_host::provisioning::load_device_secret(&paths).map_err(|_|"认证配置不可用")?;
+        easy_codex_host::provisioning::save_recovery_settings(ssid,password,host.parse().map_err(|_|"请输入正确的电脑 IPv4 地址")?,secret).map_err(|_|"恢复设置保存失败，请检查 Wi-Fi 和电脑地址".to_owned())
+    }
+    #[cfg(not(windows))] { let _=(ssid,password,host); Err("自动配网仅支持 Windows".into()) }
 }

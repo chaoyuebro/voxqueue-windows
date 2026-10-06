@@ -131,13 +131,24 @@
             <p>当前版本：<strong id="firmware-current-version">等待键盘上报</strong></p>
             <p>最新版本：<strong id="firmware-latest-version">正在读取…</strong>（软件内置恢复包）</p>
             <details class="firmware-checksum"><summary>恢复包校验值</summary><code id="firmware-sha">--</code><div id="firmware-images"></div></details>
+            <p id="recovery-config-status">正在检查配网恢复配置…</p>
+            <details class="recovery-settings"><summary>配网恢复设置</summary>
+              <form id="recovery-settings-form" class="answer-voice-form">
+                <label for="recovery-ssid">2.4 GHz Wi-Fi 名称</label><input id="recovery-ssid" required maxlength="32" autocomplete="off">
+                <label for="recovery-password">Wi-Fi 密码</label><input id="recovery-password" type="password" maxlength="64" autocomplete="new-password" placeholder="原网络留空可保留已保存密码">
+                <label for="recovery-host">电脑局域网 IPv4 地址</label><input id="recovery-host" required placeholder="例如 192.168.31.135">
+                <button id="recovery-settings-save" type="submit">保存恢复设置</button>
+                <p id="recovery-settings-result" role="status">保存在本机，烧录后自动写回；更换网络时可在这里修改。</p>
+              </form>
+            </details>
             <ol class="firmware-steps">
               <li>连接键盘后，点击“开始恢复”。</li>
               <li>将键盘关机再开机；若一直等待，在开机状态短按并松开 BOOT 一次。</li>
-              <li>写入期间保持连接，成功后键盘会自动重启。</li>
+              <li>写入期间保持连接；重启后会自动写回配网配置并检查键盘连接。</li>
             </ol>
             <div class="firmware-actions">
               <button id="flash-start" type="button" disabled>开始恢复</button>
+              <button id="restore-network" type="button" disabled>恢复配网</button>
               <button id="flash-cancel" type="button" hidden>取消等待</button>
             </div>
             <p id="flash-status" class="flash-status" role="status">准备中</p>

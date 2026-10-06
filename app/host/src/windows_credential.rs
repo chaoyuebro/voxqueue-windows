@@ -200,3 +200,16 @@ pub fn read_minimax_key() -> io::Result<Option<zeroize::Zeroizing<Vec<u8>>>> {
     }
     Ok(Some(zeroize::Zeroizing::new(text.into_bytes())))
 }
+
+const LAN_RECOVERY_TARGET: &str = "EasyCodexInput/LAN_RECOVERY_V1";
+pub fn read_lan_recovery() -> io::Result<Option<zeroize::Zeroizing<Vec<u8>>>> {
+    Ok(read_credential(LAN_RECOVERY_TARGET)?.map(zeroize::Zeroizing::new))
+}
+pub fn store_lan_recovery(bytes: &[u8]) -> io::Result<()> {
+    if bytes.is_empty() || bytes.len() > MAX_BLOB_BYTES { return Err(io::Error::new(io::ErrorKind::InvalidInput,"invalid recovery profile")); }
+    let mut target: Vec<u16> = LAN_RECOVERY_TARGET.encode_utf16().chain(Some(0)).collect();
+    let mut blob = zeroize::Zeroizing::new(bytes.to_vec());
+    let record = CredentialW { flags:0,kind:CRED_TYPE_GENERIC,target_name:target.as_mut_ptr(),comment:ptr::null_mut(),last_written:FileTime{low:0,high:0},blob_size:blob.len() as u32,blob:blob.as_mut_ptr(),persist:CRED_PERSIST_LOCAL_MACHINE,attribute_count:0,attributes:ptr::null_mut(),target_alias:ptr::null_mut(),user_name:ptr::null_mut() };
+    if unsafe { CredWriteW(&record,0) } == 0 { return Err(io::Error::last_os_error()); }
+    Ok(())
+}

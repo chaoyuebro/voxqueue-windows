@@ -75,6 +75,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 require_no_more_arguments(&mut arguments, "bind-slot")?;
                 return bind_slot(slot, &task_id);
             }
+            #[cfg(windows)]
+            "restore-lan" => {
+                require_no_more_arguments(&mut arguments, "restore-lan")?;
+                easy_codex_host::provisioning::restore_saved_lan()?;
+                println!("status=configuration_restored");
+                return Ok(());
+            }
             "provision-lan" => {
                 let ssid = arguments.next().ok_or("missing Wi-Fi SSID")?;
                 let host = arguments
