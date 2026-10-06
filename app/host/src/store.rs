@@ -17,7 +17,7 @@ use thiserror::Error;
 use crate::cache::CacheId;
 use crate::paths::{ExplicitFileLock, open_private_file};
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 pub const MAX_PENDING_JOBS_PER_TASK: u32 = 12;
 pub const MAX_GLOBAL_RUNNING_JOBS: u32 = 4;
 pub const MAX_SUMMARY_COMPLETIONS_PER_CLAIM: usize = 32;
@@ -656,8 +656,8 @@ impl StateStore {
     ) -> Result<Option<(String, Option<String>, i64)>, StoreError> {
         Ok(self.connection.query_row(
             "SELECT state, failure_kind, updated_at FROM jobs
-             WHERE task_id = ?1 AND generation = ?2
-             ORDER BY sequence DESC LIMIT 1",
+             WHERE sequence=(SELECT MAX(sequence) FROM jobs WHERE task_id=?1 AND generation=?2)
+               AND failure_dismissed=0",
             params![task_id, to_i64(generation)?],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?)
@@ -666,7 +666,7 @@ impl StateStore {
     /// Only the exact failed input in the current binding can be retried.
     pub fn failed_input(&self, task_id: &str, generation: u64, slot: u8) -> Result<Option<(String, String)>, StoreError> {
         Ok(self.connection.query_row(
-            "SELECT request_id, prompt FROM jobs WHERE request_id=(SELECT request_id FROM jobs WHERE task_id=?1 AND generation=?2 AND slot=?3 ORDER BY sequence DESC LIMIT 1) AND state='failed'",
+            "SELECT request_id, prompt FROM jobs WHERE request_id=(SELECT request_id FROM jobs WHERE task_id=?1 AND generation=?2 AND slot=?3 ORDER BY sequence DESC LIMIT 1) AND state='failed' AND failure_dismissed=0",
             params![task_id, to_i64(generation)?, slot], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?)
     }
@@ -675,7 +675,7 @@ impl StateStore {
         let binding = self.binding(slot)?.ok_or(StoreError::BindingChanged)?;
         if binding.generation != generation { return Err(StoreError::BindingChanged); }
         let job = self.connection.query_row(
-            "SELECT request_id, task_id, slot, generation, prompt, cwd, recovery_count, claim_generation FROM jobs WHERE request_id=?1 AND state='failed'",
+            "SELECT request_id, task_id, slot, generation, prompt, cwd, recovery_count, claim_generation FROM jobs WHERE request_id=?1 AND state='failed' AND failure_dismissed=0",
             [original], map_job,
         ).optional()?.ok_or(StoreError::InvalidJob)?;
         if job.task_id != binding.task_id || job.generation != generation || job.slot != slot {
@@ -1239,7 +1239,7 @@ impl StateStore {
         query_current_unread(&self.connection, task_id)
     }
 
-    /// Mark one slot's collected summaries as read, without cancelling Codex jobs.
+    /// Dismiss one slot's collected summaries and failed inputs without cancelling active jobs.
     /// Invalidate active claims and playback leases so late workers cannot resurrect old unread state.
     pub fn clear_slot_summary_queue(
         &mut self,
@@ -1265,6 +1265,10 @@ impl StateStore {
             }
             _ => return Err(StoreError::BindingChanged),
         };
+        transaction.execute(
+            "UPDATE jobs SET failure_dismissed=1 WHERE task_id=?1 AND slot=?2 AND generation=?3 AND state='failed'",
+            params![task_id, slot, to_i64(expected_generation)?],
+        )?;
         transaction.execute(
             "DELETE FROM summary_playback_leases WHERE task_id=?1",
             [&task_id],
@@ -2185,6 +2189,9 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         CREATE TABLE IF NOT EXISTS desktop_notification_turns (
         task_id TEXT NOT NULL, turn_id TEXT NOT NULL, status TEXT NOT NULL,
         PRIMARY KEY(task_id,turn_id));")?;
+    if !has_column(&transaction, "jobs", "failure_dismissed")? {
+        transaction.execute("ALTER TABLE jobs ADD COLUMN failure_dismissed INTEGER NOT NULL DEFAULT 0 CHECK(failure_dismissed IN (0,1))", [])?;
+    }
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())

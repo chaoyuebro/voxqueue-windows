@@ -62,7 +62,7 @@ async function clearQueue(slot, row) {
     const invoke = window.__TAURI__?.core?.invoke;
     if (!invoke) throw new Error("tauri_unavailable");
     renderDashboard(await invoke("clear_summary_queue", { slot, expectedGeneration: current.binding_generation }));
-    status.textContent = "待听已清除";
+    status.textContent = "待听及失败提示已清除";
   } catch {
     status.textContent = "清除失败，请刷新后重试";
   } finally {
@@ -230,7 +230,7 @@ function renderDashboard(snapshot) {
     const clearButton = /** @type {HTMLButtonElement} */ (childElement(row, ".clear-queue-button"));
     clearButton.disabled = !slot.task_id || clearingSlots.has(slot.slot);
     clearButton.ariaLabel = `清除槽位 ${slot.slot} 的待听队列`;
-    clearButton.title = "将这个槽位当前的待听总结标记为已读";
+    clearButton.title = "清除这个槽位的待听总结、失败文字和重试提示";
     const select = /** @type {HTMLSelectElement} */ (
       childElement(row, ".task-select")
     );
