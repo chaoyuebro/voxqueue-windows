@@ -11,6 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("codex_running={}", snapshot.codex_running);
     println!("codex_connected={}", snapshot.codex_connected);
     println!("keyboard_connected={}", snapshot.lan.keyboard_connected);
+    println!("keyboard_firmware_version={:?}", snapshot.lan.keyboard_firmware_version);
     println!("provider_region={}", snapshot.provider.region);
     println!("configured={}", snapshot.provider.configured);
     println!("asr_model={}", snapshot.provider.asr_model);
