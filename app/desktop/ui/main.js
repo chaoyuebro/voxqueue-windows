@@ -274,6 +274,12 @@ function renderDashboard(snapshot) {
     ).disabled = !selected;
     const selectedTask = tasks.find((task) => task.task_id === selected);
     const activity = presentActivity(slot);
+    const summary = document.querySelector(`[data-overview-slot="${slot.slot}"]`);
+    if (summary) {
+      summary.querySelector(".overview-task").textContent = slot.task_name || (slot.task_id ? "当前绑定对话" : "未绑定对话");
+      summary.querySelector(".overview-phase").textContent = activity.label;
+      summary.setAttribute("title", `管理槽位 ${slot.slot}：${slot.task_name || "未绑定对话"}`);
+    }
     const activityLabel = childElement(row, ".slot-activity");
     activityLabel.textContent = activity.label;
     activityLabel.dataset.tone = activity.tone;
@@ -359,6 +365,7 @@ async function refreshDashboard() {
   requiredElement("#firmware-current-version").textContent = "Host 离线，无法读取";
   dashboard = null;
   renderConnections(null);
+  for (const phase of document.querySelectorAll(".overview-phase")) phase.textContent = "状态不可用";
   for (const label of elements.slots.querySelectorAll(".slot-activity")) { label.textContent = "Host 离线，进度不可用"; label.dataset.tone = "idle"; }
   for (const step of elements.slots.querySelectorAll("[data-stage]")) step.classList.remove("active");
   if (previewInFlight) {
@@ -407,6 +414,7 @@ async function refresh() {
 
 elements.refresh.addEventListener("click", refresh);
 document.querySelector('a[href="#diagnostics-title"]')?.addEventListener("click", () => {
+  showWorkspacePage("slots");
   const diagnostics = document.querySelector(".diagnostics");
   if (diagnostics instanceof HTMLDetailsElement) diagnostics.open = true;
 });
@@ -436,9 +444,11 @@ let flashPollPending = false;
 function showWorkspacePage(page) {
   const flashing = page === "firmware";
   const settings = page === "answer-settings";
+  const slots = page === "slots";
   requiredElement(".workspace").classList.toggle("firmware-page", flashing);
   requiredElement(".workspace").classList.toggle("answer-settings-page", settings);
-  requiredElement("#keyboard-overview").hidden = flashing || settings;
+  requiredElement("#keyboard-overview").hidden = flashing || settings || slots;
+  requiredElement("#slot-management").hidden = !slots;
   requiredElement("#answer-settings-panel").hidden = !settings;
   firmwareUI.panel.hidden = !flashing;
   document.querySelectorAll("[data-page]").forEach((link) => {
@@ -447,7 +457,7 @@ function showWorkspacePage(page) {
     if (active) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   });
-  requiredElement(".top-nav-active").textContent = flashing ? "固件烧录" : settings ? "播报设置" : "语音键盘";
+  requiredElement(".top-nav-active").textContent = flashing ? "固件烧录" : settings ? "播报设置" : slots ? "槽位管理" : "语音键盘";
 }
 for (const link of document.querySelectorAll("[data-page]")) {
   link.addEventListener("click", (event) => {
@@ -609,4 +619,11 @@ function renderConnections(snapshot) {
   requiredElement("#keyboard-connection").dataset.connected = String(Boolean(snapshot?.lan.keyboard_connected));
   requiredElement("#codex-connection").textContent = status.codex;
   requiredElement("#codex-connection").dataset.connected = String(Boolean(snapshot?.codex_connected));
+}
+
+for (const button of document.querySelectorAll("[data-overview-slot]")) {
+  button.addEventListener("click", () => {
+    selectSlot(Number(button.getAttribute("data-overview-slot")), Number(button.getAttribute("data-overview-slot")));
+    showWorkspacePage("slots");
+  });
 }

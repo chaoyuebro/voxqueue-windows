@@ -77,7 +77,7 @@ a { color: inherit; }
 
 .workspace {
   display: grid;
-  grid-template-columns: 178px minmax(430px, 1fr) 360px;
+  grid-template-columns: 178px minmax(0, 1fr);
   min-height: calc(100vh - 78px);
 }
 .sidebar {
@@ -288,7 +288,7 @@ kbd {
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { to { opacity: .35; } }
 @media (max-width: 1100px) {
-  .workspace { grid-template-columns: 150px minmax(390px, 1fr) 340px; }
+  .workspace { grid-template-columns: 150px minmax(0, 1fr); }
   .sidebar { padding-left: 9px; padding-right: 9px; }
   .keyboard-overview { padding-left: 20px; padding-right: 20px; }
   .editor-panel { padding-left: 14px; padding-right: 14px; }
@@ -357,3 +357,19 @@ kbd {
 .slot-stages { display: flex; flex-wrap: wrap; gap: 5px; font-size: 10px; color: #8c7769; }
 .slot-stages span { padding: 3px 7px; border-radius: 4px; background: #f5f1ed; }
 .slot-stages span.active { background: #f5e0d6; color: #a64022; font-weight: 600; }
+
+#slot-management { grid-column: 2 / -1; border-left: 0; padding: 36px; }
+#slot-management .editor-heading h1 { margin: 0; font-size: 30px; }
+#slot-management .slots { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 1100px; gap: 18px; margin-top: 24px; }
+#slot-management .slot-row { padding: 18px; }
+.overview-slot-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0 24px; }
+.overview-slot-summary button { display: grid; gap: 6px; min-width: 0; padding: 12px; text-align: left; background: #fff; border: 1px solid #e8ded5; border-radius: 10px; cursor: pointer; }
+.overview-slot-summary button:hover { border-color: #c97e63; }
+.overview-slot-summary strong { font-size: 12px; }
+.overview-task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #8c7769; }
+.overview-phase { color: #a45b3b; }
+@media (max-width: 900px) {
+  #slot-management .slots { grid-template-columns: minmax(0, 1fr); }
+  #slot-management { padding: 24px; }
+  .overview-slot-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

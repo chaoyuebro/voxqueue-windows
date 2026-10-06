@@ -30,6 +30,7 @@
         <aside class="sidebar" aria-label="设备状态">
           <p class="side-heading">工作台</p>
           <a class="side-link active" href="#keyboard-overview" data-page="overview">▦ <span>键盘总览</span></a>
+          <a class="side-link" href="#slot-management" data-page="slots">▤ <span>槽位管理</span></a>
           <a class="side-link" href="#answer-settings-panel" data-page="answer-settings">♫ <span>播报设置</span></a>
           <a class="side-link" href="#firmware-panel" data-page="firmware">⇩ <span>固件烧录</span></a>
 
@@ -85,6 +86,12 @@
             </div>
             <p class="device-caption"><strong>槽位 <span id="selected-slot-number">1</span></strong><span class="caption-divider"></span><span id="selected-slot-caption">S1 说话 · S5 听总结</span></p>
           </div>
+          <div class="overview-slot-summary" aria-label="槽位状态">
+            <button type="button" data-overview-slot="1"><strong>槽位 1</strong><span class="overview-task">等待状态</span><small class="overview-phase">--</small></button>
+            <button type="button" data-overview-slot="2"><strong>槽位 2</strong><span class="overview-task">等待状态</span><small class="overview-phase">--</small></button>
+            <button type="button" data-overview-slot="3"><strong>槽位 3</strong><span class="overview-task">等待状态</span><small class="overview-phase">--</small></button>
+            <button type="button" data-overview-slot="4"><strong>槽位 4</strong><span class="overview-task">等待状态</span><small class="overview-phase">--</small></button>
+          </div>
           <div class="overview-footer">
             <span><i class="footer-dot"></i>设备与电脑通过本地网络连接</span>
             <span id="last-updated">尚未收到状态</span>
@@ -139,10 +146,10 @@
           </div>
         </section>
 
-        <aside class="editor-panel" aria-labelledby="binding-title">
+        <section id="slot-management" class="editor-panel" aria-labelledby="binding-title" hidden>
           <div class="editor-heading">
             <p class="eyebrow">VOICE SLOTS</p>
-            <h2 id="binding-title">四槽任务绑定</h2>
+            <h1 id="binding-title">槽位管理</h1>
             <p>将每组说话键与播报键绑定到一个 Codex 对话。Windows 版请保持 Codex 桌面端运行。</p>
             <span id="task-count" class="task-count">-- 个任务</span>
           </div>
@@ -156,7 +163,7 @@
             </dl>
           </details>
           <p class="panel-footer">关闭窗口不会停止 Host</p>
-        </aside>
+        </section>
       </div>
     </main>
 
