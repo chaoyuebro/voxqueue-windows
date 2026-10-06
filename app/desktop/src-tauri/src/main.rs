@@ -363,9 +363,22 @@ async fn preview_answer_voice(settings: easy_codex_host::voice_settings::VoiceSe
         settings.validate().map_err(|e| e.to_string())?;
         let paths = app_paths().ok_or("home_unavailable")?;
         let socket = paths.runtime_directory.join(HEALTH_SOCKET_NAME);
-        let dashboard = query_dashboard(&socket).map_err(|e| e.to_string())?;
-        if !dashboard.lan.preview_supported { return Err("请先在固件烧录页更新支持试听的固件".into()); }
-        if dashboard.lan.keyboard_volume_percent.is_none() { return Err("键盘离线，请连接后再试听".into()); }
+        // A reboot clears Host diagnostics until the first authenticated heartbeat.
+        // Wait through two heartbeat periods before diagnosing firmware support.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let dashboard = loop {
+            let snapshot = query_dashboard(&socket).map_err(|_| "Host 尚未就绪，请稍后重试".to_string())?;
+            if snapshot.lan.preview_supported && snapshot.lan.keyboard_volume_percent.is_some() {
+                break snapshot;
+            }
+            if std::time::Instant::now() >= deadline {
+                if snapshot.lan.keyboard_volume_percent.is_none() {
+                    return Err("尚未收到键盘的有效心跳，请等待键盘联网后重试".into());
+                }
+                return Err("键盘已连接，但上报的固件尚不支持试听，请检查固件版本".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        };
         if dashboard.lan.preview_busy { return Err("键盘正在播放或已有试听待播，请结束后再试听".into()); }
         let key = easy_codex_host::windows_credential::read_minimax_key()
             .map_err(|e| e.to_string())?.ok_or("请先配置语音服务")?;
