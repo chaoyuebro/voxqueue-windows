@@ -75,7 +75,7 @@ constexpr const char* kFirmwareVersion =
     "0.4.40-idf-v2-spk-boot-probe";
 #elif defined(EASY_INPUT_SPEAKER_ASSETS_PRODUCT)
 constexpr const char* kFirmwareVersion =
-    "0.6.2-easy-codex-board-volume";
+    "2026.10.06-r4";
 #else
 constexpr const char* kFirmwareVersion = "0.4.40-idf-v2-audio-pool";
 #endif

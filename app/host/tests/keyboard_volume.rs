@@ -37,14 +37,18 @@ fn authenticated_udp_updates_volume_rejects_tampering_and_expires() {
         assert_eq!(ingress.diagnostics().keyboard_volume_percent, Some(level * 10));
     }
     assert!(ingress.diagnostics().keyboard_firmware_version.is_none());
-    socket.send_to(&packet(10, 3, &key), target).unwrap();
+    socket.send_to(&packet(10, 4, &key), target).unwrap();
     let mut reply = [0; 128]; socket.recv_from(&mut reply).unwrap();
     std::thread::sleep(Duration::from_millis(60));
     assert_eq!(ingress.diagnostics().keyboard_firmware_version.as_deref(), Some(easy_codex_host::lan_voice::CURRENT_FIRMWARE_VERSION));
     assert!(ingress.diagnostics().keyboard_connected);
+    socket.send_to(&packet(10, 3, &key), target).unwrap();
+    socket.recv_from(&mut reply).unwrap();
+    std::thread::sleep(Duration::from_millis(60));
+    assert_eq!(ingress.diagnostics().keyboard_firmware_version.as_deref(), Some("2026.10.06-r3"));
     let count = ingress.diagnostics().heartbeat_authenticated;
     let mut altered = packet(5, 1, &key); altered[6] = 7;
-    for invalid in [altered, packet(11, 1, &key), packet(5, 4, &key)] {
+    for invalid in [altered, packet(11, 1, &key), packet(5, 5, &key)] {
         socket.send_to(&invalid, target).unwrap();
     }
     std::thread::sleep(Duration::from_millis(150));

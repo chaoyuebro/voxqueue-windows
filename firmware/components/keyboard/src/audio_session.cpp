@@ -75,6 +75,11 @@ bool AudioSessionLifecycle::active() const {
   return phase_ != AudioSessionPhase::Idle;
 }
 
+bool AudioSessionLifecycle::clean_stop_requested(std::uint32_t generation) const {
+  return owns(generation) && phase_ == AudioSessionPhase::Stopping &&
+         (stop_reason_ == "client_stop" || stop_reason_ == "max_duration");
+}
+
 std::uint64_t AudioSessionLifecycle::session_id() const {
   return session_id_;
 }

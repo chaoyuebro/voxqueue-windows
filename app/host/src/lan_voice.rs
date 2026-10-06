@@ -1,4 +1,7 @@
-pub const CURRENT_FIRMWARE_VERSION: &str = "2026.10.06-r3";
+pub const CURRENT_FIRMWARE_VERSION: &str = "2026.10.06-r4";
+fn reported_firmware_version(version: u8) -> Option<&'static str> {
+    match version { 3 => Some("2026.10.06-r3"), 4 => Some(CURRENT_FIRMWARE_VERSION), _ => None }
+}
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -457,9 +460,9 @@ impl LanVoiceIngress {
                                         HeartbeatResponse::Invalid => {}
                                         HeartbeatResponse::SendFailed(volume) => {
                                             if let Ok(mut at) = ingress_diagnostics.heartbeat_at.lock() { *at = Some(Instant::now()); }
-                                            ingress_diagnostics.preview_supported.store(matches!(packet[7], 2 | 3), Ordering::Relaxed);
+                                            ingress_diagnostics.preview_supported.store(matches!(packet[7], 2 | 3 | 4), Ordering::Relaxed);
                                             if let Ok(mut version) = ingress_diagnostics.keyboard_firmware_version.lock() {
-                                                *version = (packet[7] == 3).then(|| (CURRENT_FIRMWARE_VERSION.to_owned(), Instant::now()));
+                                                *version = reported_firmware_version(packet[7]).map(|version| (version.to_owned(), Instant::now()));
                                             }
                                     if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
                                                 *reading = volume.map(|level| (level * 10, Instant::now()));
@@ -473,9 +476,9 @@ impl LanVoiceIngress {
                                         }
                                         HeartbeatResponse::Sent(volume) => {
                                             if let Ok(mut at) = ingress_diagnostics.heartbeat_at.lock() { *at = Some(Instant::now()); }
-                                            ingress_diagnostics.preview_supported.store(matches!(packet[7], 2 | 3), Ordering::Relaxed);
+                                            ingress_diagnostics.preview_supported.store(matches!(packet[7], 2 | 3 | 4), Ordering::Relaxed);
                                             if let Ok(mut version) = ingress_diagnostics.keyboard_firmware_version.lock() {
-                                                *version = (packet[7] == 3).then(|| (CURRENT_FIRMWARE_VERSION.to_owned(), Instant::now()));
+                                                *version = reported_firmware_version(packet[7]).map(|version| (version.to_owned(), Instant::now()));
                                             }
                                     if let Ok(mut reading) = ingress_diagnostics.keyboard_volume.lock() {
                                                 *reading = volume.map(|level| (level * 10, Instant::now()));
@@ -949,7 +952,7 @@ impl ActiveLanPlayback {
             || packet[..4] != *b"EIHB"
             || packet[4] != 1
             || packet[5] & !0x03 != 0
-            || !(packet[6..8] == [0, 0] || (matches!(packet[7], 1 | 2 | 3) && packet[6] <= 10))
+            || !(packet[6..8] == [0, 0] || (matches!(packet[7], 1 | 2 | 3 | 4) && packet[6] <= 10))
             || packet[20..24] != *b"EISD"
             || packet[24] != 1
             || packet[25] != 60
@@ -982,8 +985,8 @@ impl ActiveLanPlayback {
         };
         debug_assert!(matches!(response.len(), MAILBOX_STATUS_BYTES | 36));
         match socket.send_to(&response, source) {
-            Ok(length) if length == response.len() => HeartbeatResponse::Sent((matches!(packet[7], 1 | 2 | 3)).then_some(packet[6])),
-            _ => HeartbeatResponse::SendFailed((matches!(packet[7], 1 | 2 | 3)).then_some(packet[6])),
+            Ok(length) if length == response.len() => HeartbeatResponse::Sent((matches!(packet[7], 1 | 2 | 3 | 4)).then_some(packet[6])),
+            _ => HeartbeatResponse::SendFailed((matches!(packet[7], 1 | 2 | 3 | 4)).then_some(packet[6])),
         }
     }
 

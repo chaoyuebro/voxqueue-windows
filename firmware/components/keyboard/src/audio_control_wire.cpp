@@ -57,7 +57,7 @@ std::size_t encode_heartbeat(std::uint8_t* buffer,
   buffer[7] = 0;
   if (flags.speaker_volume_level <= 10) {
     buffer[6] = flags.speaker_volume_level;
-    buffer[7] = 3;  // VoxQueue 2026.10.06-r3: volume, preview and version reporting
+    buffer[7] = 4;  // VoxQueue 2026.10.06-r4: clean recording completion
   }
   write_le64(buffer + 8, session_id);
   write_le32(buffer + 16, sequence);

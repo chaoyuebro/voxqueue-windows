@@ -1987,8 +1987,23 @@ void KeyboardAudioLink::run_audio_stream(std::uint32_t generation,
       if (xQueueReceive(frame_queue, &pending_frame, delay_ticks(kAudioFrameMs)) == pdTRUE) {
         has_pending_frame = true;
       } else {
-        capture_finished = take_capture_completion(0);
+        capture_finished = capture_finished || take_capture_completion(0);
         if (capture_finished) {
+          // Release can occur during xQueueReceive. Refresh the lifecycle after
+          // completion instead of classifying it using the pre-wait snapshot.
+          lock();
+          clean_capture_end = session_lifecycle_.clean_stop_requested(generation);
+          if (clean_capture_end) {
+            stop_reason = session_lifecycle_.stop_reason() == "max_duration"
+                              ? "max_duration" : "client_stop";
+            final_status = "mic_sent";
+          }
+          unlock();
+          // The final frame may have arrived between the timeout and completion.
+          if (xQueueReceive(frame_queue, &pending_frame, 0) == pdTRUE) {
+            has_pending_frame = true;
+            continue;
+          }
           if (clean_capture_end) {
             capture_drained = true;
           } else {

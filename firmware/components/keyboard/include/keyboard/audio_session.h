@@ -30,6 +30,7 @@ class AudioSessionLifecycle {
 
   bool owns(std::uint32_t generation) const;
   bool should_run(std::uint32_t generation) const;
+  bool clean_stop_requested(std::uint32_t generation) const;
   bool active() const;
   std::uint64_t session_id() const;
   std::uint32_t generation() const;

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 pub const BOOTLOADER_SHA: &str = "be3abea605a6be7f04c2d0f4011bd90688f799a834a164cdc6a29b16c3324287";
 pub const PARTITION_SHA: &str = "7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278";
-pub const FIRMWARE_SHA: &str = "61f08d4caf8d00eda9862a250f99abc2a4f2b58be8b6a6917a9f0c3a71bc633a";
+pub const FIRMWARE_SHA: &str = "51d75657149e9993c45a3a5e9227763970bd43718cb767751db90a63ebec88d1";
 
 // Every desktop feature must query the same Host, including MSIX cache installs.
 #[cfg(windows)]
@@ -90,7 +90,7 @@ pub fn info(resources: &Path) -> FirmwareInfo {
         recovery_ssid: recovery_network().map(|network|network.0),
         recovery_host: recovery_network().map(|network|network.1),
         latest_version: easy_codex_host::lan_voice::CURRENT_FIRMWARE_VERSION,
-        name: "2026.10.06 · 版本上报与播报试听 · VoxQueue 完整恢复包",
+        name: "2026.10.06 · 录音结束修复 · VoxQueue 完整恢复包",
         sha256: restore_sha(),
         images: IMAGES.to_vec(),
         available: cfg!(windows)
@@ -621,7 +621,7 @@ mod tests {
         for (source, image) in [
             "bootloader-20261005.bin",
             "partition-table-20261005.bin",
-            "version-reporting-r3-20261006.bin",
+            "recording-completion-r4-20261006.bin",
         ]
         .into_iter()
         .zip(IMAGES)
