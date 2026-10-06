@@ -280,6 +280,7 @@ struct LanVoiceDiagnostics {
     keyboard_volume: Mutex<Option<(u8, Instant)>>,
     preview_supported: AtomicBool,
     preview_busy: Arc<AtomicBool>,
+    preview_status: Arc<Mutex<String>>,
     mailbox_sent: AtomicU64,
     mailbox_send_failed: AtomicU64,
     playback_received: AtomicU64,
@@ -314,6 +315,8 @@ pub struct LanVoiceDiagnosticsSnapshot {
     pub preview_supported: bool,
     #[serde(default)]
     pub preview_busy: bool,
+    #[serde(default)]
+    pub preview_status: String,
     pub mailbox_sent: u64,
     pub mailbox_send_failed: u64,
     pub playback_received: u64,
@@ -394,6 +397,7 @@ impl LanVoiceIngress {
                 let mut assembler = CaptureAssembler::new(config.auth_key);
                 let mut playback = ActiveLanPlayback::default();
                 playback.busy = Some(Arc::clone(&ingress_diagnostics.preview_busy));
+                playback.preview_status = Some(Arc::clone(&ingress_diagnostics.preview_status));
                 let mut next_auth_reload = Instant::now();
                 let mut datagram = [0_u8; 1200];
                 while !ingress_shutdown.load(Ordering::Acquire) {
@@ -587,6 +591,7 @@ impl LanVoiceIngress {
                 .heartbeat_authenticated
                 .load(Ordering::Relaxed),
             preview_busy: self.diagnostics.preview_busy.load(Ordering::Relaxed),
+            preview_status: self.diagnostics.preview_status.lock().map(|status| status.clone()).unwrap_or_default(),
             preview_supported: self.diagnostics.preview_supported.load(Ordering::Relaxed),
             keyboard_volume_percent: self.diagnostics.keyboard_volume.lock().ok()
                 .and_then(|reading| *reading)
@@ -783,9 +788,22 @@ struct ActiveLanPlayback {
     mailbox_status: MailboxStatus,
     preview: Option<(u32, zeroize::Zeroizing<Vec<u8>>, Instant)>,
     busy: Option<Arc<AtomicBool>>,
+    preview_status: Option<Arc<Mutex<String>>>,
 }
 
 impl ActiveLanPlayback {
+    fn set_preview_status(&self, status: &str) {
+        if let Some(shared) = &self.preview_status {
+            if let Ok(mut current) = shared.lock() { *current = status.into(); }
+        }
+    }
+    fn fail_active_preview(&self) {
+        if self.transfer.as_ref().is_some_and(|transfer| transfer.begin.identity.request_generation & 0x8000_0000 != 0) {
+            let completed = self.preview_status.as_ref().and_then(|state| state.lock().ok()).is_some_and(|state| *state == "completed");
+            if !completed { self.set_preview_status("failed"); }
+        }
+    }
+
     fn handle_command(
         &mut self,
         command: LanPlaybackCommand,
@@ -811,6 +829,7 @@ impl ActiveLanPlayback {
                     let _ = events.send(LanPlaybackEvent::Cancelled(start.begin.identity));
                     return;
                 }
+                if start.begin.identity.request_generation & 0x8000_0000 != 0 { self.set_preview_status("streaming"); }
                 self.transfer = Some(ActivePlaybackTransfer {
                     begin: start.begin,
                     source: start.source,
@@ -844,6 +863,7 @@ impl ActiveLanPlayback {
                             source: transfer.source,
                             expires_at: Instant::now() + PLAYBACK_FINISHED_ACK_RETENTION,
                         });
+                        if identity.request_generation & 0x8000_0000 != 0 { self.set_preview_status("completed"); }
                         self.transfer = None;
                     }
                 }
@@ -854,13 +874,14 @@ impl ActiveLanPlayback {
                     .as_ref()
                     .is_some_and(|transfer| transfer.begin.identity == identity)
                 {
+                    self.fail_active_preview();
                     self.transfer = None;
                 }
             }
             LanPlaybackCommand::Mailbox(status) => self.mailbox_status = status,
             LanPlaybackCommand::Preview(token, audio, reply) => {
                 let available = self.transfer.is_none() && self.preview.as_ref().is_none_or(|(_, _, deadline)| *deadline < Instant::now());
-                if available { self.preview = Some((token, audio, Instant::now() + Duration::from_secs(30))); }
+                if available { self.set_preview_status("waiting"); self.preview = Some((token, audio, Instant::now() + Duration::from_secs(30))); }
                 let _ = reply.send(available);
             }
         }
@@ -936,8 +957,8 @@ impl ActiveLanPlayback {
                     if *token != request.request_generation || *deadline < Instant::now() || self.transfer.is_some() { return; }
                 } else { return; }
                 let (token, audio, _) = self.preview.take().unwrap();
-                let Ok(metadata) = crate::audio::inspect_eiad(&audio) else { return; };
-                let Ok(audio) = crate::audio::transcode_eiad_for_device(&audio) else { return; };
+                let Ok(metadata) = crate::audio::inspect_eiad(&audio) else { self.set_preview_status("failed"); return; };
+                let Ok(audio) = crate::audio::transcode_eiad_for_device(&audio) else { self.set_preview_status("failed"); return; };
                 let begin = PlaybackBegin {
                     identity: PlaybackIdentity { slot: request.slot, request_generation: token,
                         connection_generation: request.connection_generation, summary_generation: token as u64, lease: token as u64 },
@@ -952,6 +973,7 @@ impl ActiveLanPlayback {
                 return;
             }
             if let Some(transfer) = self.transfer.take() {
+                if transfer.begin.identity.request_generation & 0x8000_0000 != 0 { self.set_preview_status("failed"); }
                 let _ = events.send(LanPlaybackEvent::Cancelled(transfer.begin.identity));
             }
             let _ = events.send(LanPlaybackEvent::Request(LanPlaybackRequest {
@@ -1062,6 +1084,7 @@ impl ActiveLanPlayback {
                         "lan_playback=gap_retry_exhausted slot={} generation={} offset={}",
                         identity.slot, identity.summary_generation, requested_offset
                     );
+                    self.fail_active_preview();
                     self.transfer = None;
                     let _ = events.send(LanPlaybackEvent::Cancelled(identity));
                     return;
@@ -1073,6 +1096,7 @@ impl ActiveLanPlayback {
             }
             if !Self::send_next_data(transfer, key, socket) {
                 let identity = transfer.begin.identity;
+                self.fail_active_preview();
                 self.transfer = None;
                 let _ = events.send(LanPlaybackEvent::Cancelled(identity));
             }
@@ -1100,6 +1124,7 @@ impl ActiveLanPlayback {
                     expires_at: Instant::now() + PLAYBACK_FINISHED_ACK_RETENTION,
                 });
             }
+            self.fail_active_preview();
             self.transfer = None;
             let _ = events.send(LanPlaybackEvent::Cancelled(identity));
             return;
@@ -1114,6 +1139,7 @@ impl ActiveLanPlayback {
                 transfer.retry_count = 0;
                 if !Self::send_next_data(transfer, key, socket) {
                     let identity = transfer.begin.identity;
+                    self.fail_active_preview();
                     self.transfer = None;
                     let _ = events.send(LanPlaybackEvent::Cancelled(identity));
                 }
@@ -1139,6 +1165,7 @@ impl ActiveLanPlayback {
                     transfer.finish_deadline = Instant::now() + PLAYBACK_FINISH_TIMEOUT;
                 } else if !Self::send_next_data(transfer, key, socket) {
                     let identity = transfer.begin.identity;
+                    self.fail_active_preview();
                     self.transfer = None;
                     let _ = events.send(LanPlaybackEvent::Cancelled(identity));
                 }
@@ -1187,6 +1214,7 @@ impl ActiveLanPlayback {
     ) {
         if self.preview.as_ref().is_some_and(|(_, _, deadline)| *deadline <= Instant::now()) {
             self.preview = None;
+            self.set_preview_status("failed");
         }
         if let Some(busy) = &self.busy { busy.store(self.transfer.is_some() || self.preview.is_some(), Ordering::Relaxed); }
         if self
@@ -1215,6 +1243,7 @@ impl ActiveLanPlayback {
                     "lan_playback=device_finish_timeout slot={} generation={}",
                     identity.slot, identity.summary_generation
                 );
+                self.fail_active_preview();
                 self.transfer = None;
                 let _ = events.send(LanPlaybackEvent::Cancelled(identity));
             }
@@ -1229,6 +1258,7 @@ impl ActiveLanPlayback {
                 "lan_playback=transport_timeout slot={} generation={} phase={:?}",
                 identity.slot, identity.summary_generation, transfer.phase
             );
+            self.fail_active_preview();
             self.transfer = None;
             let _ = events.send(LanPlaybackEvent::Cancelled(identity));
             return;

@@ -140,6 +140,15 @@ function renderDashboard(snapshot) {
   elements.asrModel.textContent = snapshot.provider.asr_model;
   elements.ttsModel.textContent = snapshot.provider.tts_model;
   elements.ttsVoice.textContent = savedAnswerVoiceName || snapshot.provider.voice;
+  if (previewInFlight && snapshot.lan?.preview_status) {
+    const labels = { waiting: "等待键盘开始试听…", streaming: "正在传送试听音频…", completed: "试听播放完成", failed: "试听播放失败，请重试" };
+    const state = snapshot.lan.preview_status;
+    if (labels[state]) requiredElement("#answer-voice-status").textContent = labels[state];
+    if (state === "completed" || state === "failed") {
+      previewInFlight = false;
+      requiredElement("#answer-voice-preview").disabled = false;
+    }
+  }
   const keyboardVolume = snapshot.lan?.keyboard_volume_percent;
   requiredElement("#keyboard-volume-percent").textContent = typeof keyboardVolume === "number"
     ? `${keyboardVolume}%` : "等待上报（键盘未连接或固件需更新）";
@@ -336,6 +345,11 @@ async function refreshDashboard() {
   const unavailable = presentDashboardFailure(probe.connection);
   requiredElement("#keyboard-volume-percent").textContent = "Host 离线";
   dashboard = null;
+  if (previewInFlight) {
+    previewInFlight = false;
+    requiredElement("#answer-voice-preview").disabled = false;
+    requiredElement("#answer-voice-status").textContent = "Host 离线，无法确认试听结果";
+  }
   for (const button of Array.from(elements.slots.querySelectorAll(".clear-queue-button"))) {
     if (button instanceof HTMLButtonElement) button.disabled = true;
   }
@@ -510,6 +524,7 @@ const answerVoiceUI = {
   status: requiredElement("#answer-voice-status"),
 };
 let savedAnswerVoiceName = "";
+let previewInFlight = false;
 function showAnswerSpeed() {
   answerVoiceUI.value.textContent = `${Number(answerVoiceUI.speed.value).toFixed(2)}×`;
 }
@@ -561,9 +576,12 @@ answerVoiceUI.preview.addEventListener("click", async () => {
   answerVoiceUI.preview.disabled = true;
   answerVoiceUI.status.textContent = "正在生成试听…";
   try {
-    answerVoiceUI.status.textContent = await window.__TAURI__.core.invoke("preview_answer_voice", {
+    const result = await window.__TAURI__.core.invoke("preview_answer_voice", {
       settings: { voice: answerVoiceUI.voice.value, speed: Number(answerVoiceUI.speed.value), volume: 1 },
     });
-  } catch (error) { answerVoiceUI.status.textContent = `试听失败：${String(error)}`; }
-  finally { answerVoiceUI.preview.disabled = false; }
+    previewInFlight = true;
+    answerVoiceUI.status.textContent = result;
+    await refreshDashboard();
+  } catch (error) { previewInFlight = false; answerVoiceUI.status.textContent = `试听失败：${String(error)}`; }
+  finally { answerVoiceUI.preview.disabled = previewInFlight; }
 });

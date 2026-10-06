@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("keyboard_volume_percent={:?}", snapshot.lan.keyboard_volume_percent);
     println!("preview_supported={}", snapshot.lan.preview_supported);
     println!("preview_busy={}", snapshot.lan.preview_busy);
+    println!("preview_status={}", snapshot.lan.preview_status);
     println!("playback_received={}", snapshot.lan.playback_received);
     println!("mailbox_sent={}", snapshot.lan.mailbox_sent);
     println!("audio_frames_accepted={}", snapshot.lan.audio_frames_accepted);

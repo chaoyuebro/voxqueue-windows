@@ -432,7 +432,7 @@ void CodexLanPlayback::handle_data(
   }
   const auto sequence =
       static_cast<std::uint32_t>(received_bytes_ / begin_.chunk_bytes);
-  if (slots_->accept_playback_frame(slot_identity(), sequence) !=
+  if (!preview_ && slots_->accept_playback_frame(slot_identity(), sequence) !=
       easy_codex::PlaybackFrameResult::Accepted) {
     send_ack(2U);
     return;

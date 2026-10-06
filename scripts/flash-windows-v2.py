@@ -21,7 +21,7 @@ FIRMWARE = ROOT / "firmware"
 IMAGES = (
     ("0x0", FIRMWARE / "releases/bootloader-20261005.bin", "be3abea605a6be7f04c2d0f4011bd90688f799a834a164cdc6a29b16c3324287"),
     ("0x8000", FIRMWARE / "releases/partition-table-20261005.bin", "7c541b70dcac8f920c2d11589f06745e1b033fa9b95b8343de2748bb8312a278"),
-    ("0x10000", FIRMWARE / "releases/voice-preview-20261006.bin", "c9647dd841802b510d8fe970960e51790da3bc92172b68cce9b651585d75a910"),
+    ("0x10000", FIRMWARE / "releases/voice-preview-frame-fix-20261006.bin", "5c6ac9b1c27e128cc63ad43b9e2f2f235c562a30437b3bc6a49d7ab0229bad62"),
 )
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)

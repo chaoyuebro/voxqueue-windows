@@ -5,6 +5,15 @@ use sha2::Sha256;
 
 #[test]
 fn preview_is_authenticated_streamed_acknowledged_and_does_not_emit_summary_events() {
+    run_preview(false);
+}
+
+#[test]
+fn rejected_preview_reports_failure() {
+    run_preview(true);
+}
+
+fn run_preview(reject: bool) {
     let temp = tempfile::tempdir().unwrap();
     let key = [7; 32];
     let mut config = LanVoiceConfig::from_paths(&AppPaths::from_root(temp.path().join("root"))); config.bind_port = 0; config.auth_key = Some(key);
@@ -26,6 +35,7 @@ fn preview_is_authenticated_streamed_acknowledged_and_does_not_emit_summary_even
     let encoded = audio::encode_tts_audio(&pcm).unwrap();
     let token = 0x8000_0123;
     assert!(ingress.preview_audio(token, zeroize::Zeroizing::new(encoded.eiad().to_vec())));
+    assert_eq!(ingress.diagnostics().preview_status, "waiting");
     assert!(!ingress.preview_audio(token+1, zeroize::Zeroizing::new(encoded.eiad().to_vec())));
     socket.send_to(&heartbeat, &target).unwrap();
     let (size, _) = socket.recv_from(&mut buffer).unwrap();
@@ -38,6 +48,15 @@ fn preview_is_authenticated_streamed_acknowledged_and_does_not_emit_summary_even
     let (size, _) = socket.recv_from(&mut buffer).unwrap();
     let begin = decode_begin(&buffer[..size], &key).unwrap();
     assert_eq!(begin.identity.request_generation, token);
+    assert_eq!(ingress.diagnostics().preview_status, "streaming");
+    if reject {
+        socket.send_to(&encode_ack(PlaybackAck { identity: begin.identity, status: 0, next_offset: 0 }, &key), &target).unwrap();
+        let (size, _) = socket.recv_from(&mut buffer).unwrap();
+        assert!(decode_data(&buffer[..size], 42, &key).is_ok());
+        socket.send_to(&encode_ack(PlaybackAck { identity: begin.identity, status: 2, next_offset: 0 }, &key), &target).unwrap();
+        wait_status(&ingress, "failed");
+        return;
+    }
     socket.send_to(&encode_ack(PlaybackAck { identity: begin.identity, status: 0, next_offset: 0 }, &key), &target).unwrap();
     let mut collected = Vec::new();
     while collected.len() < begin.total_bytes as usize {
@@ -53,5 +72,12 @@ fn preview_is_authenticated_streamed_acknowledged_and_does_not_emit_summary_even
         let (size, _) = socket.recv_from(&mut buffer).unwrap();
         if &buffer[..4] == b"EIPK" { assert_eq!(decode_finished_ack(&buffer[..size], &key).unwrap(), (begin.identity, 0)); break; }
     }
+    wait_status(&ingress, "completed");
     assert!(ingress.try_recv_playback().is_none());
+}
+
+fn wait_status(ingress: &LanVoiceIngress, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while ingress.diagnostics().preview_status != expected && Instant::now() < deadline { std::thread::sleep(Duration::from_millis(5)); }
+    assert_eq!(ingress.diagnostics().preview_status, expected);
 }
